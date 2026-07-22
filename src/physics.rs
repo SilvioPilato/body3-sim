@@ -82,8 +82,12 @@ impl Physics {
         (GRAVITY * mass_b) / (dist_sq * dist) * delta
     }
 
-    fn compute_accelerations(objects: &[PhysicsObject], center: Vec2, half_size: f32) -> Vec<Vec2>{
+    pub fn compute_accelerations(objects: &[PhysicsObject], center: Vec2, half_size: f32) -> Vec<Vec2> {
         let tree = Quadtree::build(objects, center, half_size);
+        Self::walk_forces(objects, &tree)
+    }
+
+    pub fn walk_forces(objects: &[PhysicsObject], tree: &Quadtree<'_>) -> Vec<Vec2> {
         let mut res = Vec::new();
         for i in 0..objects.len() {
             let mut acc = Vec2::ZERO;
@@ -91,14 +95,14 @@ impl Physics {
                 if let Some(indices) = node.indices {
                     // foglia: forza diretta, i è catturato dalla closure
                     for &j in indices {
-                        if j != i { 
-                            acc+= Physics::compute_acceleration(objects[i].position, objects[j].position, objects[j].mass);
+                        if j != i {
+                            acc += Physics::compute_acceleration(objects[i].position, objects[j].position, objects[j].mass);
                         }
                     }
                     WalkDecision::Skip
                 } else {
                     let d = Vec2::distance(objects[i].position, node.center_of_mass);
-                    if d == 0.0 || (node.half_size * 2.0) / d > TETHA_THRESHOLD  {
+                    if d == 0.0 || (node.half_size * 2.0) / d > TETHA_THRESHOLD {
                         WalkDecision::Descend
                     } else {
                         acc += Physics::compute_acceleration(objects[i].position, node.center_of_mass, node.total_mass);
