@@ -168,9 +168,13 @@ No other changes to `simulation.rs`'s existing types or methods.
   own separate guard: the only value they ever receive for `physics_dt` in
   this feature is `pending.physics_dt`, which the slider range already
   keeps valid.
-- Numeric range fields (`radius_range`, `mass_range`, etc.) use `egui::
-  DragValue` with `clamp_range(...)` so the min of a pair can't be dragged
-  above its max — prevents degenerate/inverted ranges reaching `gen_range`.
+- Numeric range fields (`radius_range`, `mass_range`, etc.) use paired
+  `egui::Slider` widgets where each side's bound is the sibling field's
+  current value (the min slider's upper bound is the current max, and vice
+  versa) — two disjoint tuple-field borrows, standard Rust field-splitting,
+  no `RefCell`/cloning needed. This keeps the min of a pair from being
+  dragged above its max, preventing degenerate/inverted ranges from
+  reaching `gen_range`.
 - No other fallible paths introduced.
 
 ## Testing
