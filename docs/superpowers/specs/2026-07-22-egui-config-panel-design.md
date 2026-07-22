@@ -88,11 +88,20 @@ so it does not belong in `simulation.rs`) is responsible for:
 - A `match` on `pending.scenario` rendering the variant-specific widgets
   (sliders/`DragValue` for numeric fields, an editable `u64` field + a
   "Reroll" button for `seed` on the two random variants).
-- Two sliders for `pending.time_scale` and `pending.physics_dt`. On
+- Two sliders for `pending.time_scale` and `pending.physics_dt`, each an
+  `egui::Slider` bounded by a fixed range so `pending` itself can never
+  hold an invalid value: `time_scale` in `0.0..=5.0` (0 pauses the
+  simulation, 5 is 5x speed), `physics_dt` in `0.0005..=0.02`. On
   `response.changed()`, immediately call `sim.set_time_scale(pending
   .time_scale)` / `sim.set_physics_dt(pending.physics_dt)` — these mutate
   the *running* simulation without touching `pending`'s other fields or
-  rebuilding anything.
+  rebuilding anything. Because the slider range already excludes
+  `physics_dt <= 0.0`, `pending.physics_dt` is never invalid by the time
+  either `set_physics_dt` or `reset(pending)` sees it — the slider range is
+  the primary guard; `set_physics_dt`'s own clamp (see below) is a
+  defense-in-depth backstop for the theoretical case of a config value that
+  didn't come from this slider (there is no such path today, but the clamp
+  costs nothing and keeps the method safe to call from anywhere).
 - An "Applica" button. On click, calls `sim.reset(pending)` — full rebuild
   using whatever scenario/params are currently in `pending` (including
   whatever `time_scale`/`physics_dt` values are already there from the live
@@ -146,11 +155,16 @@ No other changes to `simulation.rs`'s existing types or methods.
 
 ## Error handling
 
-- `physics_dt` clamped to a small positive floor in `set_physics_dt` (see
-  above). `reset`/`new` rely on the same clamp having already been applied
-  to whatever's in `pending` by the time Applica is clicked (the panel never
-  lets `pending.physics_dt` go through unclamped, since the live slider path
-  is the only way this project's GUI mutates that field).
+- `physics_dt` is kept valid by two layers: the panel's slider range
+  (`0.0005..=0.02`, see above) is the primary guard — it's the only way
+  this GUI ever writes to `pending.physics_dt`, so that field can't hold
+  `<= 0.0` by construction. `set_physics_dt`'s own `.max(0.0001)` clamp is
+  a secondary backstop on the `Simulation` method itself, not load-bearing
+  for this GUI's data flow today, but keeps the method safe to call from
+  any future caller that isn't this panel. `reset`/`new` don't need their
+  own separate guard: the only value they ever receive for `physics_dt` in
+  this feature is `pending.physics_dt`, which the slider range already
+  keeps valid.
 - Numeric range fields (`radius_range`, `mass_range`, etc.) use `egui::
   DragValue` with `clamp_range(...)` so the min of a pair can't be dragged
   above its max — prevents degenerate/inverted ranges reaching `gen_range`.
