@@ -3,6 +3,10 @@ use egui_macroquad::egui;
 use macroquad::prelude::*;
 
 const SIDEBAR_WIDTH: f32 = 280.0;
+// total_energy() is O(n^2) (all-pairs potential) — recomputing it every frame
+// dominates cost at large swarm sizes. Displayed value only needs to be
+// recognizable to a human, not per-frame-accurate, so it's throttled.
+const ENERGY_LOG_INTERVAL_FRAMES: u64 = 30;
 
 fn window_conf() -> Conf {
     let screen_size = SimulationConfig::default().screen_size;
@@ -171,6 +175,8 @@ async fn main() {
     let mut sim = Simulation::new(SimulationConfig::default());
     let mut pending = *sim.config();
     let mut colors: Vec<Color> = (0..sim.objects().len()).map(|_| random_body_color()).collect();
+    let mut total_energy = sim.total_energy();
+    let mut frame_count: u64 = 0;
 
     loop {
         clear_background(BLACK);
@@ -184,8 +190,12 @@ async fn main() {
             colors = (0..sim.objects().len()).map(|_| random_body_color()).collect();
         }
 
-        let total_energy = sim.total_energy();
-        println!("total_energy={:.4}", total_energy);
+        if frame_count % ENERGY_LOG_INTERVAL_FRAMES == 0 {
+            total_energy = sim.total_energy();
+            println!("total_energy={:.4}", total_energy);
+        }
+        frame_count += 1;
+
         for (obj, color) in sim.objects().iter().zip(colors.iter()) {
             draw_circle(obj.position.x, obj.position.y, 5.0, *color);
         }
