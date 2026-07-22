@@ -69,6 +69,27 @@ impl ScenarioKind {
     }
 }
 
+fn random_body_color() -> Color {
+    // fixed high saturation/value: random hue only, so a color can never land near-black.
+    let hue = macroquad::rand::gen_range(0.0, 360.0);
+    hsv_to_color(hue, 0.75, 0.95)
+}
+
+fn hsv_to_color(h: f32, s: f32, v: f32) -> Color {
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    Color::new(r + m, g + m, b + m, 1.0)
+}
+
 fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Simulation) {
     egui::SidePanel::right("config_panel")
         .resizable(false)
@@ -149,6 +170,7 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
 async fn main() {
     let mut sim = Simulation::new(SimulationConfig::default());
     let mut pending = *sim.config();
+    let mut colors: Vec<Color> = (0..sim.objects().len()).map(|_| random_body_color()).collect();
 
     loop {
         clear_background(BLACK);
@@ -158,10 +180,14 @@ async fn main() {
             draw_panel(ctx, &mut pending, &mut sim);
         });
 
+        if colors.len() != sim.objects().len() {
+            colors = (0..sim.objects().len()).map(|_| random_body_color()).collect();
+        }
+
         let total_energy = sim.total_energy();
         println!("total_energy={:.4}", total_energy);
-        for obj in sim.objects() {
-            draw_circle(obj.position.x, obj.position.y, 5.0, RED);
+        for (obj, color) in sim.objects().iter().zip(colors.iter()) {
+            draw_circle(obj.position.x, obj.position.y, 5.0, *color);
         }
         draw_text(&format!("FPS: {}", get_fps()), 10.0, 20.0, 20.0, WHITE);
         draw_text(&format!("Energy: {:.4}", total_energy), 10.0, 40.0, 20.0, WHITE);
