@@ -4,7 +4,7 @@ use std::rc::Rc;
 use macroquad::math::{Vec2, vec2};
 use macroquad::rand::{gen_range, srand};
 
-use crate::physics::{GRAVITY, Physics, PhysicsObject, PhysicsSystem, Verlet};
+use crate::physics::{GRAVITY, Physics, PhysicsObject, Verlet};
 
 // Caps how much simulated time a single update() call can inject. Without this,
 // an abnormally large frame_time (startup GPU/shader init, alt-tab, a debugger
@@ -235,6 +235,9 @@ pub struct Simulation {
     world_half_size: f32,
     objects: Rc<Vec<PhysicsObject>>,
     accumulator: f32,
+    // acc_new from the last substep, reused as next substep's acc_old
+    // (Verlet::execute_cached) instead of recomputing it from scratch.
+    cached_acceleration: Option<Vec<Vec2>>,
 }
 
 impl Simulation {
@@ -242,7 +245,7 @@ impl Simulation {
         let center = vec2(config.screen_size / 2.0, config.screen_size / 2.0);
         let world_half_size = config.screen_size / 2.0;
         let objects = Rc::new(build_scenario(&config.scenario, center));
-        Self { config, center, world_half_size, objects, accumulator: 0.0 }
+        Self { config, center, world_half_size, objects, accumulator: 0.0, cached_acceleration: None }
     }
 
     pub fn reset(&mut self, config: SimulationConfig) {
@@ -252,7 +255,15 @@ impl Simulation {
     pub fn update(&mut self, frame_time: f32) {
         self.accumulator += frame_time.min(MAX_FRAME_TIME) * self.config.time_scale;
         while self.accumulator >= self.config.physics_dt {
-            self.objects = Verlet::execute(self.objects.clone(), self.config.physics_dt, self.center, self.world_half_size);
+            let (objects, acc_new) = Verlet::execute_cached(
+                self.objects.clone(),
+                self.config.physics_dt,
+                self.center,
+                self.world_half_size,
+                self.cached_acceleration.as_deref(),
+            );
+            self.objects = objects;
+            self.cached_acceleration = Some(acc_new);
             self.accumulator -= self.config.physics_dt;
         }
     }
@@ -263,6 +274,10 @@ impl Simulation {
 
     pub fn total_energy(&self) -> f32 {
         Physics::total_energy(&self.objects)
+    }
+
+    pub fn total_energy_approx(&self) -> f32 {
+        Physics::total_energy_approx(&self.objects, self.center, self.world_half_size)
     }
 
     pub fn config(&self) -> &SimulationConfig {

@@ -3,10 +3,67 @@ use egui_macroquad::egui;
 use macroquad::prelude::*;
 
 const SIDEBAR_WIDTH: f32 = 280.0;
-// total_energy() is O(n^2) (all-pairs potential) — recomputing it every frame
-// dominates cost at large swarm sizes. Displayed value only needs to be
-// recognizable to a human, not per-frame-accurate, so it's throttled.
+// total_energy() is exact O(n^2) (all-pairs potential) — recomputing it every
+// frame dominates cost at large swarm sizes (~1.1s at n=44000, measured).
+// Physics::total_energy_approx (Barnes-Hut tree walk) exists as a faster
+// alternative but its error grows sharply with density — 0.5% at n=500,
+// 200% at n=44000 (see tests/energy_approx_accuracy.rs) — unusable exactly
+// where speed is needed most, so it's not used here. Baseline interval
+// tuned for this codebase's default swarm_size (1000); energy_log_interval
+// scales it up at larger n so the O(n^2) cost is paid less often (doesn't
+// eliminate the periodic stall, just spaces it out).
 const ENERGY_LOG_INTERVAL_FRAMES: u64 = 30;
+
+fn energy_log_interval(swarm_size: usize) -> u64 {
+    let scale = ((swarm_size as f64 / 1000.0).sqrt()).max(1.0);
+    ((ENERGY_LOG_INTERVAL_FRAMES as f64) * scale) as u64
+}
+
+// UI slider bounds. Values only (no behavior change) — pulled out of
+// draw_panel so the tunable ranges live in one place instead of scattered
+// inline literals.
+const CENTRAL_SWARM_SIZE_RANGE: std::ops::RangeInclusive<usize> = 1..=50_000;
+
+const RANDOM_SWARM_SIZE_RANGE: std::ops::RangeInclusive<usize> = 1..=3_000;
+const RANDOM_SWARM_RADIUS_MAX: f32 = 600.0;
+const RANDOM_SWARM_CENTRAL_MASS_MIN: f32 = 100.0;
+const RANDOM_SWARM_CENTRAL_MASS_MAX: f32 = 100_000.0;
+const RANDOM_SWARM_LIGHT_MASS_MIN: f32 = 0.1;
+const RANDOM_SWARM_LIGHT_MASS_MAX: f32 = 10.0;
+
+const RANDOM_NBODY_COUNT_RANGE: std::ops::RangeInclusive<usize> = 1..=100;
+const RANDOM_NBODY_MASS_MIN: f32 = 1.0;
+const RANDOM_NBODY_MASS_MAX: f32 = 5_000.0;
+const RANDOM_NBODY_POSITION_SPREAD_RANGE: std::ops::RangeInclusive<f32> = 10.0..=400.0;
+const RANDOM_NBODY_VELOCITY_MAX: f32 = 200.0;
+
+const TIME_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.0..=5.0;
+const PHYSICS_DT_RANGE: std::ops::RangeInclusive<f32> = 0.0005..=0.02;
+
+// `--benchmark`: forces this swarm_size (matches examples/profile_workload.rs's
+// documented "20-30 FPS" cliff point, so the two numbers are comparable) and
+// measures BENCH_FRAME_COUNT real frames (physics + draw_circle + egui, the
+// full production render path) after discarding BENCH_WARMUP_FRAMES to let
+// shader compilation / GPU pipeline warm-up drop out of the stats.
+const BENCH_SWARM_SIZE: usize = 44_000;
+const BENCH_FRAME_COUNT: usize = 300;
+const BENCH_WARMUP_FRAMES: usize = 30;
+
+fn report_benchmark(samples: &mut [f64]) {
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let n = samples.len();
+    let percentile = |p: f64| samples[(((n - 1) as f64) * p).round() as usize];
+    let mean: f64 = samples.iter().sum::<f64>() / n as f64;
+    println!(
+        "render benchmark: swarm_size={BENCH_SWARM_SIZE} frames={n}\n  min={:.3}ms mean={:.3}ms p50={:.3}ms p95={:.3}ms p99={:.3}ms max={:.3}ms",
+        samples[0],
+        mean,
+        percentile(0.50),
+        percentile(0.95),
+        percentile(0.99),
+        samples[n - 1]
+    );
+}
 
 fn window_conf() -> Conf {
     let screen_size = SimulationConfig::default().screen_size;
@@ -117,19 +174,19 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
 
             match &mut pending.scenario {
                 Scenario::CentralSwarm { swarm_size } => {
-                    ui.add(egui::Slider::new(swarm_size, 1..=3000).text("swarm_size"));
+                    ui.add(egui::Slider::new(swarm_size, CENTRAL_SWARM_SIZE_RANGE).text("swarm_size"));
                 }
                 Scenario::DualCircle | Scenario::TriangleCircle | Scenario::Burrau1913 => {
                     ui.label("Fixed preset, no parameters.");
                 }
                 Scenario::RandomSwarm(params) => {
-                    ui.add(egui::Slider::new(&mut params.swarm_size, 1..=3000).text("swarm_size"));
+                    ui.add(egui::Slider::new(&mut params.swarm_size, RANDOM_SWARM_SIZE_RANGE).text("swarm_size"));
                     ui.add(egui::Slider::new(&mut params.radius_range.0, 1.0..=params.radius_range.1).text("radius min"));
-                    ui.add(egui::Slider::new(&mut params.radius_range.1, params.radius_range.0..=600.0).text("radius max"));
-                    ui.add(egui::Slider::new(&mut params.central_mass_range.0, 100.0..=params.central_mass_range.1).text("central mass min"));
-                    ui.add(egui::Slider::new(&mut params.central_mass_range.1, params.central_mass_range.0..=100_000.0).text("central mass max"));
-                    ui.add(egui::Slider::new(&mut params.light_mass_range.0, 0.1..=params.light_mass_range.1).text("light mass min"));
-                    ui.add(egui::Slider::new(&mut params.light_mass_range.1, params.light_mass_range.0..=10.0).text("light mass max"));
+                    ui.add(egui::Slider::new(&mut params.radius_range.1, params.radius_range.0..=RANDOM_SWARM_RADIUS_MAX).text("radius max"));
+                    ui.add(egui::Slider::new(&mut params.central_mass_range.0, RANDOM_SWARM_CENTRAL_MASS_MIN..=params.central_mass_range.1).text("central mass min"));
+                    ui.add(egui::Slider::new(&mut params.central_mass_range.1, params.central_mass_range.0..=RANDOM_SWARM_CENTRAL_MASS_MAX).text("central mass max"));
+                    ui.add(egui::Slider::new(&mut params.light_mass_range.0, RANDOM_SWARM_LIGHT_MASS_MIN..=params.light_mass_range.1).text("light mass min"));
+                    ui.add(egui::Slider::new(&mut params.light_mass_range.1, params.light_mass_range.0..=RANDOM_SWARM_LIGHT_MASS_MAX).text("light mass max"));
                     ui.horizontal(|ui| {
                         ui.add(egui::DragValue::new(&mut params.seed).prefix("seed: "));
                         if ui.button("Reroll").clicked() {
@@ -138,12 +195,12 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
                     });
                 }
                 Scenario::RandomNBody(params) => {
-                    ui.add(egui::Slider::new(&mut params.count, 1..=100).text("count"));
-                    ui.add(egui::Slider::new(&mut params.mass_range.0, 1.0..=params.mass_range.1).text("mass min"));
-                    ui.add(egui::Slider::new(&mut params.mass_range.1, params.mass_range.0..=5000.0).text("mass max"));
-                    ui.add(egui::Slider::new(&mut params.position_spread, 10.0..=400.0).text("position spread"));
+                    ui.add(egui::Slider::new(&mut params.count, RANDOM_NBODY_COUNT_RANGE).text("count"));
+                    ui.add(egui::Slider::new(&mut params.mass_range.0, RANDOM_NBODY_MASS_MIN..=params.mass_range.1).text("mass min"));
+                    ui.add(egui::Slider::new(&mut params.mass_range.1, params.mass_range.0..=RANDOM_NBODY_MASS_MAX).text("mass max"));
+                    ui.add(egui::Slider::new(&mut params.position_spread, RANDOM_NBODY_POSITION_SPREAD_RANGE).text("position spread"));
                     ui.add(egui::Slider::new(&mut params.velocity_range.0, 0.0..=params.velocity_range.1).text("velocity min"));
-                    ui.add(egui::Slider::new(&mut params.velocity_range.1, params.velocity_range.0..=200.0).text("velocity max"));
+                    ui.add(egui::Slider::new(&mut params.velocity_range.1, params.velocity_range.0..=RANDOM_NBODY_VELOCITY_MAX).text("velocity max"));
                     ui.horizontal(|ui| {
                         ui.add(egui::DragValue::new(&mut params.seed).prefix("seed: "));
                         if ui.button("Reroll").clicked() {
@@ -155,10 +212,10 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
 
             ui.separator();
 
-            if ui.add(egui::Slider::new(&mut pending.time_scale, 0.0..=5.0).text("time_scale")).changed() {
+            if ui.add(egui::Slider::new(&mut pending.time_scale, TIME_SCALE_RANGE).text("time_scale")).changed() {
                 sim.set_time_scale(pending.time_scale);
             }
-            if ui.add(egui::Slider::new(&mut pending.physics_dt, 0.0005..=0.02).text("physics_dt")).changed() {
+            if ui.add(egui::Slider::new(&mut pending.physics_dt, PHYSICS_DT_RANGE).text("physics_dt")).changed() {
                 sim.set_physics_dt(pending.physics_dt);
             }
 
@@ -172,13 +229,24 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let mut sim = Simulation::new(SimulationConfig::default());
+    let benchmark_mode = std::env::args().any(|arg| arg == "--benchmark");
+
+    let mut config = SimulationConfig::default();
+    if benchmark_mode {
+        config.scenario = Scenario::CentralSwarm { swarm_size: BENCH_SWARM_SIZE };
+    }
+
+    let mut sim = Simulation::new(config);
     let mut pending = *sim.config();
     let mut colors: Vec<Color> = (0..sim.objects().len()).map(|_| random_body_color()).collect();
     let mut total_energy = sim.total_energy();
     let mut frame_count: u64 = 0;
+    let mut bench_samples: Vec<f64> = Vec::with_capacity(BENCH_FRAME_COUNT);
+    let mut bench_frames_seen: usize = 0;
 
     loop {
+        let frame_start = std::time::Instant::now();
+
         clear_background(BLACK);
         sim.update(get_frame_time());
 
@@ -190,7 +258,7 @@ async fn main() {
             colors = (0..sim.objects().len()).map(|_| random_body_color()).collect();
         }
 
-        if frame_count % ENERGY_LOG_INTERVAL_FRAMES == 0 {
+        if frame_count % energy_log_interval(sim.objects().len()) == 0 {
             total_energy = sim.total_energy();
             println!("total_energy={:.4}", total_energy);
         }
@@ -204,6 +272,17 @@ async fn main() {
 
         egui_macroquad::draw();
 
-        next_frame().await
+        next_frame().await;
+
+        if benchmark_mode {
+            bench_frames_seen += 1;
+            if bench_frames_seen > BENCH_WARMUP_FRAMES {
+                bench_samples.push(frame_start.elapsed().as_secs_f64() * 1000.0);
+            }
+            if bench_samples.len() >= BENCH_FRAME_COUNT {
+                report_benchmark(&mut bench_samples);
+                std::process::exit(0);
+            }
+        }
     }
 }

@@ -73,6 +73,31 @@ fn bench_verlet_step(c: &mut Criterion) {
     group.finish();
 }
 
+// Unlike bench_verlet_step (Verlet::execute, always recomputes both force
+// evals), this measures Verlet::execute_cached given a *warm* acc_old — the
+// state any step past the first actually runs with in Simulation::update.
+// The warm-up step runs once, outside the timed region; every timed call
+// then repeats from that exact same fixed (objects, acc) pair, matching
+// bench_verlet_step's "same input every call" methodology so the two groups
+// are directly comparable. (An earlier iter_custom version that threaded
+// state across consecutive real steps let the swarm disperse over thousands
+// of steps within a single sample, which cut per-step cost on its own and
+// inflated the apparent speedup at small n — a measurement artifact, not
+// this optimization.)
+fn bench_verlet_step_cached(c: &mut Criterion) {
+    let mut group = c.benchmark_group("verlet_step_cached");
+    for &n in &SWARM_SIZES {
+        let center = vec2(SCREEN_SIZE / 2.0, SCREEN_SIZE / 2.0);
+        let half_size = SCREEN_SIZE / 2.0;
+        let initial = Rc::new(build_objects(n));
+        let (warm_objects, warm_acc) = Verlet::execute_cached(initial, PHYSICS_DT, center, half_size, None);
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| Verlet::execute_cached(warm_objects.clone(), PHYSICS_DT, center, half_size, Some(&warm_acc)));
+        });
+    }
+    group.finish();
+}
+
 fn bench_clone_objects(c: &mut Criterion) {
     let mut group = c.benchmark_group("clone_objects");
     for &n in &SWARM_SIZES {
@@ -90,6 +115,7 @@ criterion_group!(
     bench_walk_forces,
     bench_compute_accelerations,
     bench_verlet_step,
+    bench_verlet_step_cached,
     bench_clone_objects
 );
 criterion_main!(benches);
