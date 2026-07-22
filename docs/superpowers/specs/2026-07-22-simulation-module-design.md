@@ -63,9 +63,9 @@ once this module exists.
 
 New module `src/simulation.rs`, registered in `src/lib.rs` as
 `pub mod simulation;`. It depends only on `crate::physics`, `std::rc::Rc`,
-and `macroquad::math::{Vec2, vec2}` (not `macroquad::prelude`), so it stays
-free of windowing/rendering/input concerns and could in principle be reused
-without macroquad's app loop.
+`macroquad::math::{Vec2, vec2}`, and `macroquad::rand::{gen_range, srand}`
+(not `macroquad::prelude`), so it stays free of windowing/rendering/input
+concerns and could in principle be reused without macroquad's app loop.
 
 `main.rs` becomes:
 
