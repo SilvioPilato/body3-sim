@@ -268,6 +268,7 @@ impl Simulation {
     }
 
     pub fn set_physics_dt(&mut self, physics_dt: f32) {
+        // update()'s accumulator loop never terminates if physics_dt <= 0.0.
         self.config.physics_dt = physics_dt.max(0.0001);
     }
 }
