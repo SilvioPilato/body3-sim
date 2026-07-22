@@ -6,6 +6,12 @@ use macroquad::rand::{gen_range, srand};
 
 use crate::physics::{GRAVITY, Physics, PhysicsObject, PhysicsSystem, Verlet};
 
+// Caps how much simulated time a single update() call can inject. Without this,
+// an abnormally large frame_time (startup GPU/shader init, alt-tab, a debugger
+// pause) fills the accumulator and forces a burst of catch-up substeps in one
+// frame, causing a visible stutter.
+const MAX_FRAME_TIME: f32 = 0.1;
+
 #[derive(Clone, Copy, Debug)]
 pub enum Scenario {
     CentralSwarm { swarm_size: usize },
@@ -244,7 +250,7 @@ impl Simulation {
     }
 
     pub fn update(&mut self, frame_time: f32) {
-        self.accumulator += frame_time * self.config.time_scale;
+        self.accumulator += frame_time.min(MAX_FRAME_TIME) * self.config.time_scale;
         while self.accumulator >= self.config.physics_dt {
             self.objects = Verlet::execute(self.objects.clone(), self.config.physics_dt, self.center, self.world_half_size);
             self.accumulator -= self.config.physics_dt;
