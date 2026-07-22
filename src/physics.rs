@@ -87,6 +87,9 @@ impl Physics {
         Self::walk_forces(objects, &tree)
     }
 
+    // `objects` must be the exact slice (same length and order) that `tree` was
+    // built from. A mismatched slice isn't memory-unsafe but silently produces
+    // wrong accelerations (or panics on an out-of-bounds index).
     pub fn walk_forces(objects: &[PhysicsObject], tree: &Quadtree<'_>) -> Vec<Vec2> {
         let mut res = Vec::new();
         for i in 0..objects.len() {
