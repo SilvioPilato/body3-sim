@@ -264,9 +264,24 @@ async fn main() {
         }
         frame_count += 1;
 
+        // Zoom-to-fit: the physics domain grows with sqrt(swarm_size)
+        // (constant spawn density), so map the whole world square onto the
+        // fixed 800x800 sim area left of the egui sidebar. At the default
+        // n=1000, world == screen and this camera is the identity mapping.
+        let screen_size = sim.config().screen_size;
+        let world_size = sim.world_half_size() * 2.0;
+        set_camera(&Camera2D {
+            target: vec2(screen_size / 2.0, screen_size / 2.0),
+            zoom: vec2(2.0 / world_size, -2.0 / world_size),
+            viewport: Some((0, 0, screen_size as i32, screen_size as i32)),
+            ..Default::default()
+        });
+        // Compensate dot size: 5 screen px regardless of zoom level.
+        let dot_radius = 5.0 * (world_size / screen_size);
         for (obj, color) in sim.objects().iter().zip(colors.iter()) {
-            draw_circle(obj.position.x, obj.position.y, 5.0, *color);
+            draw_circle(obj.position.x, obj.position.y, dot_radius, *color);
         }
+        set_default_camera();
         draw_text(&format!("FPS: {}", get_fps()), 10.0, 20.0, 20.0, WHITE);
         draw_text(&format!("Energy: {:.4}", total_energy), 10.0, 40.0, 20.0, WHITE);
 
