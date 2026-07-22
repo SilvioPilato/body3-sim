@@ -179,9 +179,15 @@ variant:
   `cx = 300.0, cy = 300.0`, fixing the same off-center bug already fixed on
   `central_swarm`.
 - `random_swarm(params: &RandomSwarmParams, center: Vec2)` — same shape as
-  `central_swarm` (one central mass + `swarm_size` light bodies in orbit)
-  but radius, central mass, and light mass are drawn from the configured
-  ranges instead of being fixed/golden-angle-spaced.
+  `central_swarm` (one central mass + `swarm_size` light bodies in orbit),
+  keeping the golden-angle *angular* placement (for even coverage) but
+  randomizing the *radius* per body within `radius_range`, and drawing
+  central mass / light mass from their respective ranges. Velocity is not a
+  separate random draw: it reuses `central_swarm`'s derived tangential
+  circular-orbit speed (`sqrt(GRAVITY * central_mass / radius)`) computed
+  from the already-randomized radius and central mass — this is why
+  `RandomSwarmParams` has no `velocity_range` field, unlike
+  `RandomNBodyParams`.
 - `random_n_body(params: &RandomNBodyParams, center: Vec2)` — `count`
   bodies with random mass (from `mass_range`), random position within
   `position_spread` of `center`, and random velocity (magnitude from
@@ -212,7 +218,13 @@ cross-talk with other systems.
 4. (Future, not implemented here) a GUI panel would mutate a
    `SimulationConfig` and call `sim.reset(config)` on "Apply", which
    rebuilds `center`/`world_half_size`/`objects`/`accumulator` from
-   scratch via `Simulation::new` semantics.
+   scratch via `Simulation::new` semantics. If the new config's
+   `screen_size` differs from the one the OS window was created with,
+   `reset` does **not** resize the window (see Non-goals) — `center` and
+   `world_half_size` would then reflect a world that doesn't match the
+   visible canvas. Not a concern for this change (`main.rs` never calls
+   `reset`), but worth resolving (e.g. clamp/ignore `screen_size` changes
+   in `reset`, or make the window resizable) before a GUI wires up "Apply".
 
 ## Error handling
 
