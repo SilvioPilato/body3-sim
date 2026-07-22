@@ -1,13 +1,25 @@
-use body3_sim::simulation::{Scenario, Simulation, SimulationConfig};
+use body3_sim::simulation::{RandomSwarmParams, Scenario, Simulation, SimulationConfig};
 
 // Characterization test: pins Simulation::update's trajectory for a small
 // deterministic scenario before the acc_new -> acc_old caching optimization
 // lands in Verlet. Caching must not change a single bit of this output —
 // acc_new(t) and acc_old(t+1) are mathematically the same quantity.
+//
+// Uses RandomSwarm (not CentralSwarm) deliberately: RandomSwarm's radius is a
+// fixed user parameter and does not scale with central_swarm's sqrt(n) law,
+// so this cache-equivalence guard stays independent of the density fix (and
+// any future CentralSwarm geometry tweak). Bounded regime (radii 60-280
+// around a ~20000-mass center) keeps pinned values in a sane magnitude range.
 #[test]
 fn verlet_trajectory_matches_pinned_baseline() {
     let mut sim = Simulation::new(SimulationConfig {
-        scenario: Scenario::CentralSwarm { swarm_size: 5 },
+        scenario: Scenario::RandomSwarm(RandomSwarmParams {
+            seed: 42,
+            swarm_size: 6,
+            radius_range: (60.0, 280.0),
+            central_mass_range: (20000.0, 20001.0),
+            light_mass_range: (1.0, 2.0),
+        }),
         screen_size: 800.0,
         physics_dt: 0.005,
         time_scale: 1.0,
@@ -25,13 +37,14 @@ fn verlet_trajectory_matches_pinned_baseline() {
         );
     }
 
-    const EXPECTED: [(f32, f32, f32, f32); 6] = [
-        (400.001343, 400.010559, -0.260776, 0.107282),
-        (378.540680, 340.168854, 5241.006836, -1526.177734),
-        (500.903778, 368.397797, 1329.645020, 4103.954590),
-        (264.248718, 459.880005, -1491.686646, -3349.742188),
-        (591.555664, 385.502472, 247.240021, 3216.213379),
-        (186.649338, 299.033691, 1243.816284, -2631.465088),
+    const EXPECTED: [(f32, f32, f32, f32); 7] = [
+        (400.002594, 399.999146, 0.152050, 0.004110),
+        (455.964569, 541.665100, -3362.504150, 1341.465698),
+        (493.724060, 325.748749, 2552.687744, 3173.327393),
+        (263.981537, 464.094452, -1563.722900, -3289.985596),
+        (630.781921, 321.162842, 926.553955, 2709.567627),
+        (133.621109, 316.314056, 801.782593, -2553.403564),
+        (365.986206, 545.089294, -3564.842285, -823.293457),
     ];
 
     for (i, (obj, exp)) in objects.iter().zip(EXPECTED.iter()).enumerate() {

@@ -12,6 +12,26 @@ use crate::physics::{GRAVITY, Physics, PhysicsObject, Verlet};
 // frame, causing a visible stutter.
 const MAX_FRAME_TIME: f32 = 0.1;
 
+// Reference swarm_size at which the annulus is [MIN_RADIUS, MAX_RADIUS].
+// Both bounds scale with sqrt(n / REF_N) so the annulus area grows
+// proportionally to n and spawn density (bodies/area) stays constant.
+// Constant density keeps the Barnes-Hut opening-angle geometry scale-invariant:
+// without it, packing more bodies into a fixed area makes the force walk
+// degrade past O(n log n) (measured: ~169x vs ~103x predicted, n=1000->64000).
+const CENTRAL_SWARM_REF_N: f32 = 1000.0;
+const CENTRAL_SWARM_MIN_RADIUS: f32 = 60.0;
+const CENTRAL_SWARM_MAX_RADIUS: f32 = 280.0;
+// Quadtree::insert has no bounds check — bodies outside the root quadrant are
+// silently misfiled into corner quadrants, unbalancing the tree. The root
+// half-size must contain the whole swarm, with margin for orbital drift.
+const WORLD_EXTENT_MARGIN: f32 = 1.1;
+
+// Annulus radius bounds for a CentralSwarm of `n` bodies.
+pub fn central_swarm_radii(n: usize) -> (f32, f32) {
+    let scale = (n as f32 / CENTRAL_SWARM_REF_N).sqrt();
+    (CENTRAL_SWARM_MIN_RADIUS * scale, CENTRAL_SWARM_MAX_RADIUS * scale)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Scenario {
     CentralSwarm { swarm_size: usize },
@@ -88,8 +108,7 @@ fn central_swarm(n: usize, center: Vec2) -> Vec<PhysicsObject> {
     let cy = center.y;
     let central_mass = 20_000.0_f32;
     let light_mass = 1.0_f32;
-    let min_radius = 60.0_f32;
-    let max_radius = 280.0_f32;
+    let (min_radius, max_radius) = central_swarm_radii(n);
 
     let mut objects = Vec::with_capacity(n + 1);
     objects.push(PhysicsObject {
@@ -243,7 +262,7 @@ pub struct Simulation {
 impl Simulation {
     pub fn new(config: SimulationConfig) -> Self {
         let center = vec2(config.screen_size / 2.0, config.screen_size / 2.0);
-        let world_half_size = config.screen_size / 2.0;
+        let world_half_size = Self::world_extent(&config.scenario, config.screen_size);
         let objects = Rc::new(build_scenario(&config.scenario, center));
         Self { config, center, world_half_size, objects, accumulator: 0.0, cached_acceleration: None }
     }
@@ -291,5 +310,25 @@ impl Simulation {
     pub fn set_physics_dt(&mut self, physics_dt: f32) {
         // update()'s accumulator loop never terminates if physics_dt <= 0.0.
         self.config.physics_dt = physics_dt.max(0.0001);
+    }
+
+    // Half-size of the square physics domain (quadtree root) for a scenario:
+    // at least screen_size/2, grown to contain scenario extents that exceed it.
+    // CentralSwarm radii scale with sqrt(n); RandomSwarm's radius max (UI slider,
+    // up to 600) can also exceed the default 400. Single source of this rule so
+    // benches/examples compute the same half-size production runs with.
+    pub fn world_extent(scenario: &Scenario, screen_size: f32) -> f32 {
+        let base = screen_size / 2.0;
+        match scenario {
+            Scenario::CentralSwarm { swarm_size } => {
+                base.max(central_swarm_radii(*swarm_size).1 * WORLD_EXTENT_MARGIN)
+            }
+            Scenario::RandomSwarm(params) => base.max(params.radius_range.1 * WORLD_EXTENT_MARGIN),
+            _ => base,
+        }
+    }
+
+    pub fn world_half_size(&self) -> f32 {
+        self.world_half_size
     }
 }
