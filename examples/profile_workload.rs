@@ -13,6 +13,9 @@ fn main() {
 
     let start = std::time::Instant::now();
     for _ in 0..PROFILE_ITERATIONS {
+        // time_scale=1.0 and feeding physics_dt back as the frame time makes
+        // the accumulator hit its threshold exactly once per call (dt == dt),
+        // so every iteration runs exactly one Verlet substep, deterministically.
         let dt = sim.config().physics_dt;
         sim.update(dt);
     }
