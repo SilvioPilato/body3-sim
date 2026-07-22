@@ -262,4 +262,12 @@ impl Simulation {
     pub fn config(&self) -> &SimulationConfig {
         &self.config
     }
+
+    pub fn set_time_scale(&mut self, time_scale: f32) {
+        self.config.time_scale = time_scale;
+    }
+
+    pub fn set_physics_dt(&mut self, physics_dt: f32) {
+        self.config.physics_dt = physics_dt.max(0.0001);
+    }
 }
