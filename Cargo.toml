@@ -6,3 +6,10 @@ edition = "2024"
 [dependencies]
 macroquad = "0.4.15"
 egui-macroquad = "0.17.3"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "physics_benchmarks"
+harness = false
