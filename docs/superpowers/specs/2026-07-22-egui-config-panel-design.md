@@ -21,8 +21,9 @@ process.
 - Add `egui-macroquad = "0.17.3"` as the only new dependency. Verified: it
   depends on `macroquad = "0.4.14"` (compatible with our pinned `0.4.15`,
   same major.minor line, semver-compatible) and `egui = "0.31.1"`.
-- Widen the window from `SCREEN_SIZE` (800) to `SCREEN_SIZE + SIDEBAR_WIDTH`
-  (800 + 280 = 1080), keeping height at `SCREEN_SIZE` (800). The simulation
+- Widen the window from `screen_size` (800, read from
+  `SimulationConfig::default().screen_size`) to `screen_size + SIDEBAR_WIDTH`
+  (800 + 280 = 1080), keeping height at `screen_size` (800). The simulation
   canvas keeps drawing in world coordinates `0..800` on both axes — no
   coordinate remapping needed, since macroquad's default screen-space origin
   is the window's top-left and the added window width is exactly where the
@@ -63,9 +64,11 @@ process.
 
 `Cargo.toml` gains one dependency: `egui-macroquad = "0.17.3"`.
 
-`main.rs`'s `window_conf()` changes its `window_width` from `SCREEN_SIZE as
-i32` to `(SCREEN_SIZE + SIDEBAR_WIDTH) as i32` (a new const,
-`SIDEBAR_WIDTH: f32 = 280.0`), height unchanged.
+`main.rs`'s `window_conf()` changes its `window_width` from `screen_size as
+i32` to `(screen_size + SIDEBAR_WIDTH) as i32` (a new const,
+`SIDEBAR_WIDTH: f32 = 280.0`, added to `main.rs`; `screen_size` itself is
+still read from `SimulationConfig::default().screen_size`, unchanged from
+today), height unchanged.
 
 `main()` gains a `pending: SimulationConfig` local, initialized from
 `sim.config().clone()` (config types are already `Copy`). Each frame:
