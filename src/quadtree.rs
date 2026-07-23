@@ -142,6 +142,13 @@ impl<'a> Quadtree<'a> {
     pub fn build(objects: &'a [PhysicsObject], center: Vec2, half_size: f32) -> Self {
         let mut tree = Self::new(center, half_size);
         for (i, obj) in objects.iter().enumerate() {
+            debug_assert!(
+                (obj.position.x - center.x).abs() <= half_size
+                    && (obj.position.y - center.y).abs() <= half_size,
+                "body at {:?} outside root center={center:?} half_size={half_size}; \
+                 build the root with fitting_root",
+                obj.position
+            );
             tree.objects.push(obj);
             tree.root.insert(i, &tree.objects, 0);
         }
@@ -153,4 +160,34 @@ impl<'a> Quadtree<'a> {
         self.objects.push(obj);
         self.root.insert(index, &self.objects, 0);
     }
+}
+
+// Root center and half-size that provably contain every body. `insert` has no
+// bounds check by design (it is the hot path), so the root must be correct by
+// construction: a body outside it is filed into a corner quadrant, and the
+// node summaries it lands in then misdescribe its position for every
+// opening-angle test in the walk.
+//
+// Non-finite positions are skipped rather than propagated — an infinite root
+// would collapse the tree to a single leaf and quietly turn the walk into
+// O(n^2). The floor keeps the half-size positive for coincident or empty
+// input, where the extent is zero.
+pub fn fitting_root(objects: &[PhysicsObject]) -> (Vec2, f32) {
+    const MARGIN: f32 = 1.01;
+    const MIN_HALF_SIZE: f32 = 1.0;
+
+    let mut lo = vec2(f32::INFINITY, f32::INFINITY);
+    let mut hi = vec2(f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for o in objects {
+        if o.position.is_finite() {
+            lo = lo.min(o.position);
+            hi = hi.max(o.position);
+        }
+    }
+    if !lo.is_finite() || !hi.is_finite() {
+        return (Vec2::ZERO, MIN_HALF_SIZE);
+    }
+    let center = (lo + hi) * 0.5;
+    let half = ((hi - lo).max_element() * 0.5 * MARGIN).max(MIN_HALF_SIZE);
+    (center, half)
 }
