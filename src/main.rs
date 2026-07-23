@@ -444,7 +444,15 @@ async fn main() {
             }
             if bench_samples.len() >= BENCH_FRAME_COUNT {
                 report_benchmark(&mut bench_samples, bench_swarm_size);
+                #[cfg(not(target_arch = "wasm32"))]
                 std::process::exit(0);
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // benchmark mode is not meaningful in browser; stop
+                    // collecting and continue rendering so the tab stays alive.
+                    bench_samples.clear();
+                    bench_frames_seen = 0;
+                }
             }
         }
     }
