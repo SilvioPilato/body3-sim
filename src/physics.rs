@@ -6,17 +6,27 @@ use crate::quadtree::{Quadtree, WalkDecision};
 
 pub const GRAVITY: f32 = 100_000.0;
 
-// Plummer softening length. Replaces the bare 1/r^2 singularity with
+// Plummer softening replaces the bare 1/r^2 singularity with
 // 1/(r^2 + softening^2), capping the peak close-encounter force at
 // ~GRAVITY*m/softening^2 and the potential-well depth at ~GRAVITY*m/softening.
-// This bounds the smallest resolvable encounter timescale to
+// That bounds the smallest resolvable encounter timescale to
 // ~sqrt(softening^3 / (GRAVITY*m)); fixed-dt Verlet stays symplectic (energy
-// conserved) only while that timescale >= dt. At softening=0.001 the timescale
-// was ~1e-7 << dt=0.005, so close passes injected spurious energy (measured
-// |growth| 11514x over T=0.3s @ n=44000); softening=1.0 lifts it to ~3e-3
-// (~0.6*dt) and energy stops diverging (|growth| ~0.9x). Threaded through the
-// physics call chain via SimulationConfig.softening; this constant is the
-// default for callers without a config handy (benches, examples).
+// conserved) only while that timescale >= dt.
+//
+// The mass in that expression is the mass of the body being encountered, and
+// the binding encounter for every swarm orbiter is with the CORE (20000), not
+// with another light body (1.0). Evaluating the criterion at the light mass —
+// as this file previously did — understates the required softening by ~220x
+// at the production dt, and the resulting energy injection is what made
+// swarms fly apart (+54% energy over 10 simulated seconds at n=1000; see
+// examples/stability_sweep.rs). Callers derive their softening from
+// `min_softening` via `simulation::integration_params` instead of hardcoding.
+pub fn min_softening(dt: f32, mass: f32) -> f32 {
+    (dt * dt * GRAVITY * mass).cbrt()
+}
+
+// Fallback for callers without a scenario handy (benches, examples that pin a
+// value deliberately). NOT the production value — production derives it.
 pub const DEFAULT_SOFTENING: f32 = 1.0;
 
 // Default Barnes-Hut opening-angle threshold. Kept as a named constant so
