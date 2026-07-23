@@ -6,9 +6,11 @@ const SIDEBAR_WIDTH: f32 = 280.0;
 // total_energy() is exact O(n^2) (all-pairs potential) — recomputing it every
 // frame dominates cost at large swarm sizes (~1.1s at n=44000, measured).
 // Physics::total_energy_approx (Barnes-Hut tree walk) exists as a faster
-// alternative but its error grows sharply with density — 0.5% at n=500,
-// 200% at n=44000 (see tests/energy_approx_accuracy.rs) — unusable exactly
-// where speed is needed most, so it's not used here. Baseline interval
+// alternative but stays unusable at the high-n regime where speed matters:
+// its error grows with PAIR AGGREGATION COUNT, not density — measured via
+// examples/energy_theta_sweep at ~0.5% @ n=500, ~30% @ n=8000, ~185% @
+// n=44000 (theta=1.8, post density-fix). Sweeping theta only moves it ~10-20%;
+// the n-growth is intrinsic. So it is not wired into the UI. Baseline interval
 // tuned for this codebase's default swarm_size (1000); energy_log_interval
 // scales it up at larger n so the O(n^2) cost is paid less often (doesn't
 // eliminate the periodic stall, just spaces it out).

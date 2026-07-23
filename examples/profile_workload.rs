@@ -1,6 +1,6 @@
 use body3_sim::simulation::{Scenario, Simulation, SimulationConfig};
 
-const PROFILE_SWARM_SIZE: usize = 44_000; // the empirically "20-30 FPS" cliff point
+const PROFILE_SWARM_SIZE: usize = 44_000; // pre-density-fix "20-30 FPS" cliff point; post density-fix + theta=1.8 it's ~10.9 ms/step headless (was ~37 ms)
 const PROFILE_ITERATIONS: u32 = 300;
 
 fn main() {
