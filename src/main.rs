@@ -3,17 +3,21 @@ use egui_macroquad::egui;
 use macroquad::prelude::*;
 
 const SIDEBAR_WIDTH: f32 = 280.0;
-// total_energy() is exact O(n^2) (all-pairs potential) — recomputing it every
-// frame dominates cost at large swarm sizes (~1.1s at n=44000, measured).
-// Physics::total_energy_approx (Barnes-Hut tree walk) exists as a faster
-// alternative but stays unusable at the high-n regime where speed matters:
-// its error grows with PAIR AGGREGATION COUNT, not density — measured via
-// examples/energy_theta_sweep at ~0.5% @ n=500, ~30% @ n=8000, ~185% @
-// n=44000 (theta=1.8, post density-fix). Sweeping theta only moves it ~10-20%;
-// the n-growth is intrinsic. So it is not wired into the UI. Baseline interval
-// tuned for this codebase's default swarm_size (1000); energy_log_interval
-// scales it up at larger n so the O(n^2) cost is paid less often (doesn't
-// eliminate the periodic stall, just spaces it out).
+// total_energy() is exact O(n^2) (all-pairs potential) — recomputing it on
+// the render thread at large swarm sizes (~1.1s at n=44000, measured) stalls
+// rendering, so it is offloaded to a background worker (see `energy_worker`
+// usage in main below); the exact value updates asynchronously when the
+// result arrives. Physics::total_energy_approx (Barnes-Hut tree walk) exists
+// as a faster alternative but stays unusable at the high-n regime where speed
+// matters: its error grows with PAIR AGGREGATION COUNT, not density —
+// measured via examples/energy_theta_sweep at ~0.5% @ n=500, ~30% @ n=8000,
+// ~185% @ n=44000 (theta=1.8, post density-fix). Sweeping theta only moves it
+// ~10-20%; the n-growth is intrinsic. So it is not wired into the UI.
+// Baseline interval tuned for this codebase's default swarm_size (1000);
+// energy_log_interval scales it up at larger n. With the worker in place the
+// interval only throttles how often a NEW snapshot is requested — a request
+// is dropped if the previous computation is still in flight, which at
+// n>=~16000 means effectively one computation at a time.
 const ENERGY_LOG_INTERVAL_FRAMES: u64 = 30;
 
 fn energy_log_interval(swarm_size: usize) -> u64 {
@@ -245,6 +249,7 @@ async fn main() {
     let mut frame_count: u64 = 0;
     let mut bench_samples: Vec<f64> = Vec::with_capacity(BENCH_FRAME_COUNT);
     let mut bench_frames_seen: usize = 0;
+    let mut energy_worker = body3_sim::energy::EnergyWorker::new();
 
     loop {
         let frame_start = std::time::Instant::now();
@@ -260,8 +265,15 @@ async fn main() {
             colors = (0..sim.objects().len()).map(|_| random_body_color()).collect();
         }
 
+        // exact energy is O(n^2) (~1.1s at n=44000) — computed on a background
+        // thread from a snapshot so the render loop never stalls; display/print
+        // update when the result arrives. On wasm32 the worker is a no-op stub,
+        // so the energy display just stays at its initial value there.
         if frame_count % energy_log_interval(sim.objects().len()) == 0 {
-            total_energy = sim.total_energy();
+            energy_worker.request(sim.objects());
+        }
+        if let Some(energy) = energy_worker.try_recv() {
+            total_energy = energy;
             println!("total_energy={:.4}", total_energy);
         }
         frame_count += 1;
