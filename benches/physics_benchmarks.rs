@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use body3_sim::physics::{Physics, PhysicsObject, PhysicsSystem, Verlet};
+use body3_sim::physics::{Physics, PhysicsSystem, Verlet};
 use body3_sim::quadtree::Quadtree;
 use body3_sim::simulation::{Scenario, Simulation, SimulationConfig};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
@@ -10,22 +10,22 @@ const SWARM_SIZES: [usize; 7] = [1000, 2000, 4000, 8000, 16000, 32000, 64000];
 const SCREEN_SIZE: f32 = 800.0;
 const PHYSICS_DT: f32 = 0.005;
 
-fn build_objects(swarm_size: usize) -> Vec<PhysicsObject> {
-    let sim = Simulation::new(SimulationConfig {
+fn build_sim(swarm_size: usize) -> Simulation {
+    Simulation::new(SimulationConfig {
         scenario: Scenario::CentralSwarm { swarm_size },
         screen_size: SCREEN_SIZE,
         physics_dt: PHYSICS_DT,
         time_scale: 1.0,
-    });
-    sim.objects().to_vec()
+    })
 }
 
 fn bench_quadtree_build(c: &mut Criterion) {
     let mut group = c.benchmark_group("quadtree_build");
     for &n in &SWARM_SIZES {
-        let objects = build_objects(n);
+        let sim = build_sim(n);
+        let objects = sim.objects().to_vec();
         let center = vec2(SCREEN_SIZE / 2.0, SCREEN_SIZE / 2.0);
-        let half_size = SCREEN_SIZE / 2.0;
+        let half_size = sim.world_half_size();
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
             b.iter(|| Quadtree::build(&objects, center, half_size));
         });
@@ -36,9 +36,10 @@ fn bench_quadtree_build(c: &mut Criterion) {
 fn bench_walk_forces(c: &mut Criterion) {
     let mut group = c.benchmark_group("walk_forces");
     for &n in &SWARM_SIZES {
-        let objects = build_objects(n);
+        let sim = build_sim(n);
+        let objects = sim.objects().to_vec();
         let center = vec2(SCREEN_SIZE / 2.0, SCREEN_SIZE / 2.0);
-        let half_size = SCREEN_SIZE / 2.0;
+        let half_size = sim.world_half_size();
         let tree = Quadtree::build(&objects, center, half_size);
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
             b.iter(|| Physics::walk_forces(&objects, &tree));
@@ -50,9 +51,10 @@ fn bench_walk_forces(c: &mut Criterion) {
 fn bench_compute_accelerations(c: &mut Criterion) {
     let mut group = c.benchmark_group("compute_accelerations");
     for &n in &SWARM_SIZES {
-        let objects = build_objects(n);
+        let sim = build_sim(n);
+        let objects = sim.objects().to_vec();
         let center = vec2(SCREEN_SIZE / 2.0, SCREEN_SIZE / 2.0);
-        let half_size = SCREEN_SIZE / 2.0;
+        let half_size = sim.world_half_size();
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
             b.iter(|| Physics::compute_accelerations(&objects, center, half_size));
         });
@@ -63,9 +65,10 @@ fn bench_compute_accelerations(c: &mut Criterion) {
 fn bench_verlet_step(c: &mut Criterion) {
     let mut group = c.benchmark_group("verlet_step");
     for &n in &SWARM_SIZES {
-        let objects = Rc::new(build_objects(n));
+        let sim = build_sim(n);
+        let objects = Rc::new(sim.objects().to_vec());
         let center = vec2(SCREEN_SIZE / 2.0, SCREEN_SIZE / 2.0);
-        let half_size = SCREEN_SIZE / 2.0;
+        let half_size = sim.world_half_size();
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
             b.iter(|| Verlet::execute(objects.clone(), PHYSICS_DT, center, half_size));
         });
@@ -87,9 +90,10 @@ fn bench_verlet_step(c: &mut Criterion) {
 fn bench_verlet_step_cached(c: &mut Criterion) {
     let mut group = c.benchmark_group("verlet_step_cached");
     for &n in &SWARM_SIZES {
+        let sim = build_sim(n);
         let center = vec2(SCREEN_SIZE / 2.0, SCREEN_SIZE / 2.0);
-        let half_size = SCREEN_SIZE / 2.0;
-        let initial = Rc::new(build_objects(n));
+        let half_size = sim.world_half_size();
+        let initial = Rc::new(sim.objects().to_vec());
         let (warm_objects, warm_acc) = Verlet::execute_cached(initial, PHYSICS_DT, center, half_size, None);
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
             b.iter(|| Verlet::execute_cached(warm_objects.clone(), PHYSICS_DT, center, half_size, Some(&warm_acc)));
@@ -101,7 +105,8 @@ fn bench_verlet_step_cached(c: &mut Criterion) {
 fn bench_clone_objects(c: &mut Criterion) {
     let mut group = c.benchmark_group("clone_objects");
     for &n in &SWARM_SIZES {
-        let objects = build_objects(n);
+        let sim = build_sim(n);
+        let objects = sim.objects().to_vec();
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
             b.iter(|| objects.to_vec());
         });
