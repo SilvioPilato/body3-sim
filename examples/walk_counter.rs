@@ -49,7 +49,7 @@ fn count_walk_forces(objects: &[PhysicsObject], tree: &Quadtree, theta: f32) -> 
     for i in 0..objects.len() {
         let mut local = Counters::default();
         let pos_i = objects[i].position;
-        tree.root.walk(
+        tree.walk(
             &mut |node: NodeView| {
                 if let Some(indices) = node.indices {
                     local.leaf_hits += 1;
@@ -69,7 +69,6 @@ fn count_walk_forces(objects: &[PhysicsObject], tree: &Quadtree, theta: f32) -> 
                     }
                 }
             },
-            &tree.objects,
         );
         total.internal_visits += local.internal_visits;
         total.leaf_hits += local.leaf_hits;

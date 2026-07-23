@@ -4,143 +4,97 @@ use crate::physics::PhysicsObject;
 
 const BUCKET_CAP: usize = 4;
 const MAX_DEPTH: u32 = 20;
+// Sentinel for "no child" / "no overflow" in the flat arena's u32 index slots.
+const EMPTY: u32 = u32::MAX;
 
 #[derive(PartialEq)]
 pub enum WalkDecision { Descend, Skip }
 
 pub struct NodeView<'a> { pub total_mass: f32, pub center_of_mass: Vec2, pub half_size: f32, pub indices: Option<&'a [usize]> }
 
-pub struct Quadtree<'a> {
-    pub root: Quadrant,
-    pub objects: Vec<&'a PhysicsObject>,
-}
-
-enum QuadNode {
-    Leaf{
-        indices: Vec<usize>,
-        total_mass: f32,
-        center_of_mass: Vec2,
-    },
-    Internal(Quadrant),
-}
-
-pub struct Quadrant {
+// Flat arena node. The whole tree is one `Vec<Node>` instead of a graph of
+// heap-boxed quadrants each owning a `Vec` of indices — killing the per-node
+// `Box` and per-leaf `Vec` allocation churn that dominated build cost (and that
+// wasm's dlmalloc punishes hardest).
+//
+// Every node is a square region. A leaf stores its bodies inline in `bodies`
+// (up to BUCKET_CAP); `internal` marks a region that has been subdivided, whose
+// bodies have moved down into `children` (indices into the same arena, or
+// EMPTY). `overflow` is the escape hatch for the MAX_DEPTH-saturated case where
+// more than BUCKET_CAP bodies pile into one leaf that can no longer split: the
+// full index list then lives in `Quadtree::overflow` and `bodies` is ignored.
+struct Node {
     center: Vec2,
     half_size: f32,
     total_mass: f32,
     center_of_mass: Vec2,
-    children: [Option<Box<QuadNode>>; 4],
+    children: [u32; 4],
+    bodies: [usize; BUCKET_CAP],
+    body_count: u32,
+    internal: bool,
+    overflow: u32,
 }
 
-impl Quadrant {
-    pub fn new(center: Vec2, half_size: f32) -> Self {
-        Quadrant {
+impl Node {
+    fn leaf(center: Vec2, half_size: f32) -> Self {
+        Node {
             center,
             half_size,
             total_mass: 0.0,
             center_of_mass: center,
-            children: [None, None, None, None],
-        }
-    }
-
-    fn sub_center(&self, q_index: usize) -> Vec2 {
-        let offset = self.half_size / 2.0;
-        match q_index {
-            0 => vec2(self.center.x - offset, self.center.y + offset),
-            1 => vec2(self.center.x + offset, self.center.y + offset),
-            2 => vec2(self.center.x - offset, self.center.y - offset),
-            3 => vec2(self.center.x + offset, self.center.y - offset),
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn walk<F>(&self, visitor: &mut F, objects: &[&PhysicsObject])
-    where F: FnMut(NodeView) -> WalkDecision
-    {
-        for child in &self.children {
-            match child {
-                Some(node) => {
-                    match node.as_ref() {
-                        QuadNode::Leaf { indices, total_mass, center_of_mass } => {
-                            visitor(NodeView { total_mass: *total_mass, center_of_mass: *center_of_mass, half_size: 0.0, indices: Some(indices) });
-                        },
-                        QuadNode::Internal(quadrant) => {
-                            let decision = visitor(NodeView { total_mass: quadrant.total_mass, center_of_mass: quadrant.center_of_mass, half_size: quadrant.half_size, indices: None });
-                            if decision == WalkDecision::Descend {
-                                quadrant.walk(visitor, objects);
-                            }
-                        },
-                    }
-                },
-                None => {},
-            }
-        }
-    }
-
-    pub fn insert(&mut self, index: usize, objects: &[&PhysicsObject], depth: u32) {
-        let q_index = self.find_quadrant(&objects[index].position);
-        let m = objects[index].mass;
-        let new_total = self.total_mass + m;
-        self.center_of_mass = (self.center_of_mass * self.total_mass + objects[index].position * m) / new_total;
-        self.total_mass += m;
-
-        match self.children[q_index].take() {
-            Some(mut boxed) => match &mut *boxed {
-                QuadNode::Leaf { indices, total_mass, center_of_mass } => {
-                    if indices.len() < BUCKET_CAP || depth >= MAX_DEPTH {
-                        let new_leaf_total = *total_mass + m;
-                        *center_of_mass = (*center_of_mass * *total_mass + objects[index].position * m) / new_leaf_total;
-                        *total_mass = new_leaf_total;
-                        indices.push(index);
-                        self.children[q_index] = Some(boxed);
-                    } else {
-                        let existing = std::mem::take(indices);
-                        let mut sub = Quadrant::new(self.sub_center(q_index), self.half_size / 2.0);
-                        for i in existing {
-                            sub.insert(i, objects, depth + 1);
-                        }
-                        sub.insert(index, objects, depth + 1);
-                        self.children[q_index] = Some(Box::new(QuadNode::Internal(sub)));
-                    }
-                }
-                QuadNode::Internal(sub) => {
-                    sub.insert(index, objects, depth + 1);
-                    self.children[q_index] = Some(boxed);
-                }
-            },
-            None => {
-                self.children[q_index] = Some(Box::new(QuadNode::Leaf {
-                    indices: vec![index],
-                    total_mass: m,
-                    center_of_mass: objects[index].position,
-                }));
-            }
-        }
-    }
-
-    pub fn find_quadrant(&self, pos: &Vec2) -> usize {
-        let right = pos.x >= self.center.x;
-        let down = pos.y >= self.center.y;
-
-        match (right, down) {
-            (false, true) => 0,
-            (true, true) => 1,
-            (false, false) => 2,
-            (true, false) => 3,
+            children: [EMPTY; 4],
+            bodies: [0; BUCKET_CAP],
+            body_count: 0,
+            internal: false,
+            overflow: EMPTY,
         }
     }
 }
 
-impl<'a> Quadtree<'a> {
-    pub fn new(center: Vec2, half_size: f32) -> Self {
-        Quadtree {
-            root: Quadrant::new(center, half_size),
-            objects: Vec::new(),
-        }
-    }
+pub struct Quadtree {
+    nodes: Vec<Node>,
+    // Body lists for leaves that saturated at MAX_DEPTH and overflowed their
+    // inline bucket. Almost always empty; only allocates under extreme
+    // clustering (many bodies closer than half_size / 2^MAX_DEPTH).
+    overflow: Vec<Vec<usize>>,
+}
 
-    pub fn build(objects: &'a [PhysicsObject], center: Vec2, half_size: f32) -> Self {
-        let mut tree = Self::new(center, half_size);
+fn find_quadrant(center: Vec2, pos: Vec2) -> usize {
+    let right = pos.x >= center.x;
+    let down = pos.y >= center.y;
+    match (right, down) {
+        (false, true) => 0,
+        (true, true) => 1,
+        (false, false) => 2,
+        (true, false) => 3,
+    }
+}
+
+fn sub_center(center: Vec2, half_size: f32, q: usize) -> Vec2 {
+    let offset = half_size / 2.0;
+    match q {
+        0 => vec2(center.x - offset, center.y + offset),
+        1 => vec2(center.x + offset, center.y + offset),
+        2 => vec2(center.x - offset, center.y - offset),
+        3 => vec2(center.x + offset, center.y - offset),
+        _ => unreachable!(),
+    }
+}
+
+impl Quadtree {
+    pub fn build(objects: &[PhysicsObject], center: Vec2, half_size: f32) -> Self {
+        // Node count is bounded by ~2n (n leaves + internal nodes above them);
+        // one up-front reservation keeps the whole build to a single allocation
+        // in the common case.
+        let mut nodes: Vec<Node> = Vec::with_capacity(2 * objects.len() + 16);
+        // Root is a pre-subdivided region: bodies live in its leaf children,
+        // never in the root directly (matches the previous Quadrant-rooted tree,
+        // so the walk visits the exact same set of nodes).
+        let mut root = Node::leaf(center, half_size);
+        root.internal = true;
+        nodes.push(root);
+        let mut overflow: Vec<Vec<usize>> = Vec::new();
+
         for (i, obj) in objects.iter().enumerate() {
             debug_assert!(
                 (obj.position.x - center.x).abs() <= half_size
@@ -149,16 +103,147 @@ impl<'a> Quadtree<'a> {
                  build the root with fitting_root",
                 obj.position
             );
-            tree.objects.push(obj);
-            tree.root.insert(i, &tree.objects, 0);
+            Self::insert(&mut nodes, &mut overflow, objects, 0, i, 0);
         }
-        tree
+        Quadtree { nodes, overflow }
     }
 
-    pub fn insert(&mut self, obj: &'a PhysicsObject) {
-        let index = self.objects.len();
-        self.objects.push(obj);
-        self.root.insert(index, &self.objects, 0);
+    // Insert body `index` into the subtree rooted at `node_idx`. Threads the
+    // arena by index (not by reference) so the recursive descent can push new
+    // nodes without holding an aliasing borrow. `objects` is needed to read the
+    // saved bodies' positions/masses when a full leaf subdivides.
+    fn insert(
+        nodes: &mut Vec<Node>,
+        overflow: &mut Vec<Vec<usize>>,
+        objects: &[PhysicsObject],
+        node_idx: usize,
+        index: usize,
+        depth: u32,
+    ) {
+        let pos = objects[index].position;
+        let m = objects[index].mass;
+
+        // Aggregate this region's mass / center-of-mass on the way down.
+        {
+            let node = &mut nodes[node_idx];
+            let new_total = node.total_mass + m;
+            node.center_of_mass = (node.center_of_mass * node.total_mass + pos * m) / new_total;
+            node.total_mass = new_total;
+        }
+
+        let (center, half_size) = { let n = &nodes[node_idx]; (n.center, n.half_size) };
+        let q = find_quadrant(center, pos);
+        let child = nodes[node_idx].children[q];
+
+        if child == EMPTY {
+            let mut leaf = Node::leaf(sub_center(center, half_size, q), half_size / 2.0);
+            leaf.bodies[0] = index;
+            leaf.body_count = 1;
+            leaf.total_mass = m;
+            leaf.center_of_mass = pos;
+            let new_idx = nodes.len() as u32;
+            nodes.push(leaf);
+            nodes[node_idx].children[q] = new_idx;
+            return;
+        }
+
+        let child = child as usize;
+        if nodes[child].internal {
+            Self::insert(nodes, overflow, objects, child, index, depth + 1);
+            return;
+        }
+
+        // Child is a leaf. Room to spare, or already spilled to the overflow
+        // pool, or saturated at MAX_DEPTH (can't subdivide): append. Otherwise
+        // subdivide and re-file.
+        let bc = nodes[child].body_count as usize;
+        if nodes[child].overflow != EMPTY {
+            let ov = nodes[child].overflow as usize;
+            overflow[ov].push(index);
+            Self::add_leaf_mass(&mut nodes[child], pos, m);
+        } else if bc < BUCKET_CAP {
+            let leaf = &mut nodes[child];
+            leaf.bodies[bc] = index;
+            leaf.body_count += 1;
+            Self::add_leaf_mass(leaf, pos, m);
+        } else if depth >= MAX_DEPTH {
+            // Saturated leaf: move its inline bodies into a fresh overflow list
+            // and continue appending there. `bodies` is ignored from now on.
+            let mut list = Vec::with_capacity(BUCKET_CAP * 2);
+            list.extend_from_slice(&nodes[child].bodies);
+            list.push(index);
+            let ov = overflow.len() as u32;
+            overflow.push(list);
+            nodes[child].overflow = ov;
+            Self::add_leaf_mass(&mut nodes[child], pos, m);
+        } else {
+            let saved = nodes[child].bodies;
+            {
+                let leaf = &mut nodes[child];
+                leaf.internal = true;
+                leaf.body_count = 0;
+                leaf.total_mass = 0.0;
+                leaf.center_of_mass = leaf.center;
+                leaf.children = [EMPTY; 4];
+            }
+            for &bi in saved.iter() {
+                Self::insert(nodes, overflow, objects, child, bi, depth + 1);
+            }
+            Self::insert(nodes, overflow, objects, child, index, depth + 1);
+        }
+    }
+
+    fn add_leaf_mass(leaf: &mut Node, pos: Vec2, m: f32) {
+        let new_total = leaf.total_mass + m;
+        leaf.center_of_mass = (leaf.center_of_mass * leaf.total_mass + pos * m) / new_total;
+        leaf.total_mass = new_total;
+    }
+
+    // Visit the tree with the same node ordering and leaf/internal distinction
+    // the previous Quadrant::walk exposed: each of a region's children is either
+    // a leaf (yielded with its index slice, half_size 0.0) or an internal region
+    // (yielded with its half_size; descended into only if the visitor says so).
+    pub fn walk<F>(&self, visitor: &mut F)
+    where F: FnMut(NodeView) -> WalkDecision
+    {
+        if !self.nodes.is_empty() {
+            self.walk_node(0, visitor);
+        }
+    }
+
+    fn walk_node<F>(&self, idx: usize, visitor: &mut F)
+    where F: FnMut(NodeView) -> WalkDecision
+    {
+        let node = &self.nodes[idx];
+        for &c in &node.children {
+            if c == EMPTY {
+                continue;
+            }
+            let child = &self.nodes[c as usize];
+            if child.internal {
+                let decision = visitor(NodeView {
+                    total_mass: child.total_mass,
+                    center_of_mass: child.center_of_mass,
+                    half_size: child.half_size,
+                    indices: None,
+                });
+                if decision == WalkDecision::Descend {
+                    self.walk_node(c as usize, visitor);
+                }
+            } else {
+                let indices = if child.overflow != EMPTY {
+                    &self.overflow[child.overflow as usize][..]
+                } else {
+                    &child.bodies[..child.body_count as usize]
+                };
+                visitor(NodeView {
+                    total_mass: child.total_mass,
+                    center_of_mass: child.center_of_mass,
+                    half_size: 0.0,
+                    indices: Some(indices),
+                });
+            }
+        }
     }
 }
 

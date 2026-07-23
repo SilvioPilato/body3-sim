@@ -119,11 +119,11 @@ impl Physics {
         kinetic + Self::walk_potential(objects, &tree, theta, softening)
     }
 
-    fn walk_potential(objects: &[PhysicsObject], tree: &Quadtree<'_>, theta: f32, softening: f32) -> f32 {
+    fn walk_potential(objects: &[PhysicsObject], tree: &Quadtree, theta: f32, softening: f32) -> f32 {
         let mut total = 0.0f32;
         for i in 0..objects.len() {
             let mut pair_sum = 0.0f32;
-            tree.root.walk(&mut |node| {
+            tree.walk(&mut |node| {
                 if let Some(indices) = node.indices {
                     for &j in indices {
                         if j != i {
@@ -142,7 +142,7 @@ impl Physics {
                         WalkDecision::Skip
                     }
                 }
-            }, &tree.objects);
+            });
             total += pair_sum;
         }
         total * 0.5
@@ -163,11 +163,11 @@ impl Physics {
     // `objects` must be the exact slice (same length and order) that `tree` was
     // built from. A mismatched slice isn't memory-unsafe but silently produces
     // wrong accelerations (or panics on an out-of-bounds index).
-    pub fn walk_forces(objects: &[PhysicsObject], tree: &Quadtree<'_>, theta: f32, softening: f32) -> Vec<Vec2> {
-        let mut res = Vec::new();
+    pub fn walk_forces(objects: &[PhysicsObject], tree: &Quadtree, theta: f32, softening: f32) -> Vec<Vec2> {
+        let mut res = Vec::with_capacity(objects.len());
         for i in 0..objects.len() {
             let mut acc = Vec2::ZERO;
-            tree.root.walk(&mut |node| {
+            tree.walk(&mut |node| {
                 if let Some(indices) = node.indices {
                     for &j in indices {
                         if j != i {
@@ -184,7 +184,7 @@ impl Physics {
                         WalkDecision::Skip
                     }
                 }
-            }, &tree.objects);
+            });
             res.push(acc);
         }
         res
