@@ -93,12 +93,13 @@ enum ScenarioKind {
     Circumbinary,
     Trojan,
     Slingshot,
+    GalaxyCollision,
     RandomSwarm,
     RandomNBody,
 }
 
 impl ScenarioKind {
-    const ALL: [ScenarioKind; 11] = [
+    const ALL: [ScenarioKind; 12] = [
         ScenarioKind::CentralSwarm,
         ScenarioKind::DualCircle,
         ScenarioKind::TriangleCircle,
@@ -108,6 +109,7 @@ impl ScenarioKind {
         ScenarioKind::Circumbinary,
         ScenarioKind::Trojan,
         ScenarioKind::Slingshot,
+        ScenarioKind::GalaxyCollision,
         ScenarioKind::RandomSwarm,
         ScenarioKind::RandomNBody,
     ];
@@ -123,6 +125,7 @@ impl ScenarioKind {
             ScenarioKind::Circumbinary => "Circumbinary",
             ScenarioKind::Trojan => "Trojan (L4/L5)",
             ScenarioKind::Slingshot => "Slingshot",
+            ScenarioKind::GalaxyCollision => "Galaxy Collision",
             ScenarioKind::RandomSwarm => "Random Swarm",
             ScenarioKind::RandomNBody => "Random N-Body",
         }
@@ -139,6 +142,7 @@ impl ScenarioKind {
             Scenario::Circumbinary => ScenarioKind::Circumbinary,
             Scenario::Trojan => ScenarioKind::Trojan,
             Scenario::Slingshot => ScenarioKind::Slingshot,
+            Scenario::GalaxyCollision { .. } => ScenarioKind::GalaxyCollision,
             Scenario::RandomSwarm(_) => ScenarioKind::RandomSwarm,
             Scenario::RandomNBody(_) => ScenarioKind::RandomNBody,
         }
@@ -155,6 +159,7 @@ impl ScenarioKind {
             ScenarioKind::Circumbinary => Scenario::Circumbinary,
             ScenarioKind::Trojan => Scenario::Trojan,
             ScenarioKind::Slingshot => Scenario::Slingshot,
+            ScenarioKind::GalaxyCollision => Scenario::GalaxyCollision { swarm_size: 2000 },
             ScenarioKind::RandomSwarm => Scenario::RandomSwarm(RandomSwarmParams::default()),
             ScenarioKind::RandomNBody => Scenario::RandomNBody(RandomNBodyParams::default()),
         }
@@ -206,6 +211,9 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
             match &mut pending.scenario {
                 Scenario::CentralSwarm { swarm_size } => {
                     ui.add(egui::Slider::new(swarm_size, CENTRAL_SWARM_SIZE_RANGE).text("swarm_size"));
+                }
+                Scenario::GalaxyCollision { swarm_size } => {
+                    ui.add(egui::Slider::new(swarm_size, CENTRAL_SWARM_SIZE_RANGE).text("swarm_size (total)"));
                 }
                 Scenario::DualCircle
                 | Scenario::TriangleCircle

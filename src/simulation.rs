@@ -43,9 +43,18 @@ pub enum Scenario {
     Circumbinary,
     Trojan,
     Slingshot,
+    GalaxyCollision { swarm_size: usize },
     RandomSwarm(RandomSwarmParams),
     RandomNBody(RandomNBodyParams),
 }
+
+// GalaxyCollision: two central_swarms launched at each other on a grazing
+// trajectory. GALAXY_SEPARATION is the initial x-gap between the two cores;
+// GALAXY_IMPACT is the y offset (impact parameter) that makes the pass grazing
+// rather than head-on; GALAXY_APPROACH_SPEED is each core's bulk speed inward.
+const GALAXY_SEPARATION: f32 = 500.0;
+const GALAXY_IMPACT: f32 = 150.0;
+const GALAXY_APPROACH_SPEED: f32 = 900.0;
 
 // SolarSystem: a heavy central star plus planets on circular orbits at
 // increasing radii. (orbital radius, mass) per planet, inner to outer.
@@ -171,16 +180,21 @@ impl Default for SimulationConfig {
 }
 
 fn central_swarm(n: usize, center: Vec2) -> Vec<PhysicsObject> {
-    let cx = center.x;
-    let cy = center.y;
+    central_swarm_at(n, center, Vec2::ZERO)
+}
+
+// A central_swarm whose every body (core + orbiters) is additionally moving at
+// `bulk` — the whole cluster translates rigidly, so the internal orbits are
+// unchanged. Used to launch two swarms at each other in GalaxyCollision.
+fn central_swarm_at(n: usize, center: Vec2, bulk: Vec2) -> Vec<PhysicsObject> {
     let central_mass = 20_000.0_f32;
     let light_mass = 1.0_f32;
     let (min_radius, max_radius) = central_swarm_radii(n);
 
     let mut objects = Vec::with_capacity(n + 1);
     objects.push(PhysicsObject {
-        position: Vec2 { x: cx, y: cy },
-        velocity: Vec2::ZERO,
+        position: center,
+        velocity: bulk,
         mass: central_mass,
     });
 
@@ -190,10 +204,10 @@ fn central_swarm(n: usize, center: Vec2) -> Vec<PhysicsObject> {
         let radius = min_radius + (max_radius - min_radius) * (i as f32 / n.max(1) as f32);
         let angle = golden_angle * i as f32;
         let dir = Vec2 { x: angle.cos(), y: angle.sin() };
-        let position = Vec2 { x: cx, y: cy } + dir * radius;
+        let position = center + dir * radius;
         let speed = (GRAVITY * central_mass / radius).sqrt();
         let tangent = Vec2 { x: -dir.y, y: dir.x } * speed;
-        objects.push(PhysicsObject { position, velocity: tangent, mass: light_mass });
+        objects.push(PhysicsObject { position, velocity: tangent + bulk, mass: light_mass });
     }
     objects
 }
@@ -391,6 +405,16 @@ fn slingshot(center: Vec2) -> Vec<PhysicsObject> {
     objects
 }
 
+fn galaxy_collision(total: usize, center: Vec2) -> Vec<PhysicsObject> {
+    let per = total / 2;
+    let a_center = center + vec2(-GALAXY_SEPARATION / 2.0, GALAXY_IMPACT / 2.0);
+    let b_center = center + vec2(GALAXY_SEPARATION / 2.0, -GALAXY_IMPACT / 2.0);
+    // opposite bulk velocities -> the pair's net momentum cancels (equal cores).
+    let mut objects = central_swarm_at(per, a_center, vec2(GALAXY_APPROACH_SPEED, 0.0));
+    objects.extend(central_swarm_at(total - per, b_center, vec2(-GALAXY_APPROACH_SPEED, 0.0)));
+    objects
+}
+
 fn random_swarm(params: &RandomSwarmParams, center: Vec2) -> Vec<PhysicsObject> {
     srand(params.seed);
     let central_mass = gen_range(params.central_mass_range.0, params.central_mass_range.1);
@@ -446,6 +470,7 @@ fn build_scenario(scenario: &Scenario, center: Vec2) -> Vec<PhysicsObject> {
         Scenario::Circumbinary => circumbinary(center),
         Scenario::Trojan => trojan(center),
         Scenario::Slingshot => slingshot(center),
+        Scenario::GalaxyCollision { swarm_size } => galaxy_collision(*swarm_size, center),
         Scenario::RandomSwarm(params) => random_swarm(params, center),
         Scenario::RandomNBody(params) => random_n_body(params, center),
     }
@@ -539,6 +564,12 @@ impl Simulation {
             }
             Scenario::Trojan => base.max(TROJAN_ORBIT_RADIUS * WORLD_EXTENT_MARGIN),
             Scenario::Slingshot => base.max(-SLINGSHOT_START_X * WORLD_EXTENT_MARGIN),
+            Scenario::GalaxyCollision { swarm_size } => {
+                // root must reach a core's offset plus its own swarm radius.
+                let per = (*swarm_size / 2).max(1);
+                let reach = GALAXY_SEPARATION / 2.0 + central_swarm_radii(per).1;
+                base.max(reach * WORLD_EXTENT_MARGIN)
+            }
             _ => base,
         }
     }
