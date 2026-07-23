@@ -55,13 +55,13 @@ const BENCH_SWARM_SIZE: usize = 44_000;
 const BENCH_FRAME_COUNT: usize = 300;
 const BENCH_WARMUP_FRAMES: usize = 30;
 
-fn report_benchmark(samples: &mut [f64]) {
+fn report_benchmark(samples: &mut [f64], swarm_size: usize) {
     samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let n = samples.len();
     let percentile = |p: f64| samples[(((n - 1) as f64) * p).round() as usize];
     let mean: f64 = samples.iter().sum::<f64>() / n as f64;
     println!(
-        "render benchmark: swarm_size={BENCH_SWARM_SIZE} frames={n}\n  min={:.3}ms mean={:.3}ms p50={:.3}ms p95={:.3}ms p99={:.3}ms max={:.3}ms",
+        "render benchmark: swarm_size={swarm_size} frames={n}\n  min={:.3}ms mean={:.3}ms p50={:.3}ms p95={:.3}ms p99={:.3}ms max={:.3}ms",
         samples[0],
         mean,
         percentile(0.50),
@@ -235,11 +235,24 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let benchmark_mode = std::env::args().any(|arg| arg == "--benchmark");
+    let args: Vec<String> = std::env::args().collect();
+    let benchmark_mode = args.iter().any(|a| a == "--benchmark" || a.starts_with("--benchmark="));
+    // --benchmark [N] or --benchmark=N; otherwise defaults to BENCH_SWARM_SIZE.
+    let bench_swarm_size: usize = args
+        .iter()
+        .position(|a| a == "--benchmark")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<usize>().ok())
+        .or_else(|| {
+            args.iter().find_map(|a| {
+                a.strip_prefix("--benchmark=").and_then(|s| s.parse::<usize>().ok())
+            })
+        })
+        .unwrap_or(BENCH_SWARM_SIZE);
 
     let mut config = SimulationConfig::default();
     if benchmark_mode {
-        config.scenario = Scenario::CentralSwarm { swarm_size: BENCH_SWARM_SIZE };
+        config.scenario = Scenario::CentralSwarm { swarm_size: bench_swarm_size };
     }
 
     let mut sim = Simulation::new(config);
@@ -319,7 +332,7 @@ async fn main() {
                 bench_samples.push(frame_start.elapsed().as_secs_f64() * 1000.0);
             }
             if bench_samples.len() >= BENCH_FRAME_COUNT {
-                report_benchmark(&mut bench_samples);
+                report_benchmark(&mut bench_samples, bench_swarm_size);
                 std::process::exit(0);
             }
         }
