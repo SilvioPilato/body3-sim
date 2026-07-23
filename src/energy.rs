@@ -1,7 +1,11 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread::JoinHandle;
 
-use crate::physics::{Physics, PhysicsObject};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::physics::Physics;
+use crate::physics::PhysicsObject;
 
 // Exact total-energy computation off the render thread. The render loop calls
 // `request()` with an immutable snapshot at whatever cadence it likes, and

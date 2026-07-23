@@ -251,5 +251,5 @@ pub fn write_url_query(query: &str) {
     let path = window.location().pathname().unwrap_or_default();
     let new_url = if query.is_empty() { path } else { format!("{}?{}", path, query) };
     let history = window.history().expect("no history object");
-    let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", &new_url);
+    let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&new_url));
 }
