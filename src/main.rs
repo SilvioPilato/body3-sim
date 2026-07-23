@@ -303,6 +303,16 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
                 body3_sim::url::write_url_query(&body3_sim::url::encode(pending));
                 applied = true;
             }
+            if ui.button("Copy link").clicked() {
+                let url = body3_sim::url::encode(pending);
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let window = web_sys::window().expect("no global window object");
+                    let _ = window.navigator().clipboard().write_text(&format!("{}?{}", window.location().href().unwrap_or_default(), url));
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                println!("config url: {}", url);
+            }
         });
     applied
 }
