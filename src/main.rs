@@ -90,18 +90,24 @@ enum ScenarioKind {
     Burrau1913,
     SolarSystem,
     FigureEight,
+    Circumbinary,
+    Trojan,
+    Slingshot,
     RandomSwarm,
     RandomNBody,
 }
 
 impl ScenarioKind {
-    const ALL: [ScenarioKind; 8] = [
+    const ALL: [ScenarioKind; 11] = [
         ScenarioKind::CentralSwarm,
         ScenarioKind::DualCircle,
         ScenarioKind::TriangleCircle,
         ScenarioKind::Burrau1913,
         ScenarioKind::SolarSystem,
         ScenarioKind::FigureEight,
+        ScenarioKind::Circumbinary,
+        ScenarioKind::Trojan,
+        ScenarioKind::Slingshot,
         ScenarioKind::RandomSwarm,
         ScenarioKind::RandomNBody,
     ];
@@ -114,6 +120,9 @@ impl ScenarioKind {
             ScenarioKind::Burrau1913 => "Burrau 1913",
             ScenarioKind::SolarSystem => "Solar System",
             ScenarioKind::FigureEight => "Figure Eight",
+            ScenarioKind::Circumbinary => "Circumbinary",
+            ScenarioKind::Trojan => "Trojan (L4/L5)",
+            ScenarioKind::Slingshot => "Slingshot",
             ScenarioKind::RandomSwarm => "Random Swarm",
             ScenarioKind::RandomNBody => "Random N-Body",
         }
@@ -127,6 +136,9 @@ impl ScenarioKind {
             Scenario::Burrau1913 => ScenarioKind::Burrau1913,
             Scenario::SolarSystem => ScenarioKind::SolarSystem,
             Scenario::FigureEight => ScenarioKind::FigureEight,
+            Scenario::Circumbinary => ScenarioKind::Circumbinary,
+            Scenario::Trojan => ScenarioKind::Trojan,
+            Scenario::Slingshot => ScenarioKind::Slingshot,
             Scenario::RandomSwarm(_) => ScenarioKind::RandomSwarm,
             Scenario::RandomNBody(_) => ScenarioKind::RandomNBody,
         }
@@ -140,6 +152,9 @@ impl ScenarioKind {
             ScenarioKind::Burrau1913 => Scenario::Burrau1913,
             ScenarioKind::SolarSystem => Scenario::SolarSystem,
             ScenarioKind::FigureEight => Scenario::FigureEight,
+            ScenarioKind::Circumbinary => Scenario::Circumbinary,
+            ScenarioKind::Trojan => Scenario::Trojan,
+            ScenarioKind::Slingshot => Scenario::Slingshot,
             ScenarioKind::RandomSwarm => Scenario::RandomSwarm(RandomSwarmParams::default()),
             ScenarioKind::RandomNBody => Scenario::RandomNBody(RandomNBodyParams::default()),
         }
@@ -196,7 +211,10 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
                 | Scenario::TriangleCircle
                 | Scenario::Burrau1913
                 | Scenario::SolarSystem
-                | Scenario::FigureEight => {
+                | Scenario::FigureEight
+                | Scenario::Circumbinary
+                | Scenario::Trojan
+                | Scenario::Slingshot => {
                     ui.label("Fixed preset, no parameters.");
                 }
                 Scenario::RandomSwarm(params) => {

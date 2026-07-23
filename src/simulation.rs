@@ -40,6 +40,9 @@ pub enum Scenario {
     Burrau1913,
     SolarSystem,
     FigureEight,
+    Circumbinary,
+    Trojan,
+    Slingshot,
     RandomSwarm(RandomSwarmParams),
     RandomNBody(RandomNBodyParams),
 }
@@ -63,6 +66,32 @@ const SOLAR_PLANETS: [(f32, f32); 6] = [
 // velocity -> sqrt(GRAVITY*m/L) * v (time rescales by sqrt(L^3/(GRAVITY*m))).
 const FIG8_SCALE: f32 = 150.0;
 const FIG8_MASS: f32 = 50.0;
+
+// Circumbinary: a tight two-star binary at the barycenter (dual_circle pattern)
+// plus planets orbiting the pair far enough out to treat it as a point mass
+// M = m_a + m_b. (orbital radius, mass) per planet.
+const CIRCUMBINARY_STAR_A_MASS: f32 = 30_000.0;
+const CIRCUMBINARY_STAR_B_MASS: f32 = 20_000.0;
+const CIRCUMBINARY_SEPARATION: f32 = 80.0;
+const CIRCUMBINARY_PLANETS: [(f32, f32); 3] = [(250.0, 20.0), (340.0, 30.0), (430.0, 15.0)];
+
+// Trojan: a sun, one planet on a circular orbit, and small bodies clustered at
+// the planet's L4 (+60 deg) and L5 (-60 deg) Lagrange points. Stable while the
+// planet/sun mass ratio is well below the Gascheau limit (~1/25).
+const TROJAN_SUN_MASS: f32 = 40_000.0;
+const TROJAN_PLANET_MASS: f32 = 200.0;
+const TROJAN_ORBIT_RADIUS: f32 = 250.0;
+const TROJAN_COUNT_PER_POINT: usize = 6;
+const TROJAN_MASS: f32 = 2.0;
+
+// Slingshot: a heavy stationary planet and light probes flying past at
+// different impact parameters, each bent onto a hyperbola. Demonstrates the
+// close-encounter deflection physics (the same regime the softening length
+// tames). Impact parameter = perpendicular offset of the incoming velocity.
+const SLINGSHOT_PLANET_MASS: f32 = 20_000.0;
+const SLINGSHOT_PROBE_SPEED: f32 = 4_000.0;
+const SLINGSHOT_START_X: f32 = -450.0; // probe start x, relative to center
+const SLINGSHOT_IMPACT_PARAMS: [f32; 3] = [60.0, 120.0, 240.0];
 
 #[derive(Clone, Copy, Debug)]
 pub struct RandomSwarmParams {
@@ -277,6 +306,91 @@ fn figure_eight(center: Vec2) -> Vec<PhysicsObject> {
     ]
 }
 
+// A body on a prograde circular orbit of `radius` around a `central_mass` at
+// `center`, positioned at `angle`.
+fn orbiting_body(center: Vec2, central_mass: f32, angle: f32, radius: f32, mass: f32) -> PhysicsObject {
+    let dir = Vec2 { x: angle.cos(), y: angle.sin() };
+    let speed = (GRAVITY * central_mass / radius).sqrt();
+    PhysicsObject {
+        position: center + dir * radius,
+        velocity: Vec2 { x: -dir.y, y: dir.x } * speed,
+        mass,
+    }
+}
+
+fn circumbinary(center: Vec2) -> Vec<PhysicsObject> {
+    let m1 = CIRCUMBINARY_STAR_A_MASS;
+    let m2 = CIRCUMBINARY_STAR_B_MASS;
+    let m_total = m1 + m2;
+    let d = CIRCUMBINARY_SEPARATION;
+    let r1 = d * m2 / m_total;
+    let r2 = d * m1 / m_total;
+    // dual_circle's two-body circular solution: v_rel = sqrt(G*M/d), split by mass.
+    let v_factor = (GRAVITY / (d * m_total)).sqrt();
+    let mut star_a = PhysicsObject { position: center + vec2(r1, 0.0), velocity: vec2(0.0, m2 * v_factor), mass: m1 };
+    let mut star_b = PhysicsObject { position: center + vec2(-r2, 0.0), velocity: vec2(0.0, -m1 * v_factor), mass: m2 };
+
+    let golden_angle = TAU * 0.618_034_f32;
+    let mut planet_momentum = Vec2::ZERO;
+    let mut planets: Vec<PhysicsObject> = Vec::with_capacity(CIRCUMBINARY_PLANETS.len());
+    for (i, &(radius, mass)) in CIRCUMBINARY_PLANETS.iter().enumerate() {
+        let p = orbiting_body(center, m_total, golden_angle * i as f32, radius, mass);
+        planet_momentum += p.velocity * mass;
+        planets.push(p);
+    }
+    // Boost both stars equally to absorb the planets' net momentum; equal boost
+    // is a pure translation of the binary, so its internal orbit is unchanged.
+    let boost = -planet_momentum / m_total;
+    star_a.velocity += boost;
+    star_b.velocity += boost;
+
+    let mut objects = vec![star_a, star_b];
+    objects.extend(planets);
+    objects
+}
+
+fn trojan(center: Vec2) -> Vec<PhysicsObject> {
+    let m_sun = TROJAN_SUN_MASS;
+    let r = TROJAN_ORBIT_RADIUS;
+    let l4 = TAU / 6.0; // 60 degrees
+
+    // (angle, radius, mass): the planet, then a small cluster around L4 and L5
+    // with a deterministic +-8 deg spread so the trojans librate visibly.
+    let mut specs: Vec<(f32, f32, f32)> = vec![(0.0, r, TROJAN_PLANET_MASS)];
+    for base in [l4, -l4] {
+        for j in 0..TROJAN_COUNT_PER_POINT {
+            let t = j as f32 / (TROJAN_COUNT_PER_POINT as f32 - 1.0) - 0.5; // -0.5..0.5
+            specs.push((base + t * 16.0_f32.to_radians(), r + t * 6.0, TROJAN_MASS));
+        }
+    }
+
+    let mut momentum = Vec2::ZERO;
+    let bodies: Vec<PhysicsObject> = specs
+        .iter()
+        .map(|&(angle, radius, mass)| {
+            let b = orbiting_body(center, m_sun, angle, radius, mass);
+            momentum += b.velocity * mass;
+            b
+        })
+        .collect();
+
+    let mut objects = vec![PhysicsObject { position: center, velocity: -momentum / m_sun, mass: m_sun }];
+    objects.extend(bodies);
+    objects
+}
+
+fn slingshot(center: Vec2) -> Vec<PhysicsObject> {
+    let mut objects = vec![PhysicsObject { position: center, velocity: Vec2::ZERO, mass: SLINGSHOT_PLANET_MASS }];
+    for &b in SLINGSHOT_IMPACT_PARAMS.iter() {
+        objects.push(PhysicsObject {
+            position: center + vec2(SLINGSHOT_START_X, -b),
+            velocity: vec2(SLINGSHOT_PROBE_SPEED, 0.0),
+            mass: 1.0,
+        });
+    }
+    objects
+}
+
 fn random_swarm(params: &RandomSwarmParams, center: Vec2) -> Vec<PhysicsObject> {
     srand(params.seed);
     let central_mass = gen_range(params.central_mass_range.0, params.central_mass_range.1);
@@ -329,6 +443,9 @@ fn build_scenario(scenario: &Scenario, center: Vec2) -> Vec<PhysicsObject> {
         Scenario::Burrau1913 => burrau_1913(center),
         Scenario::SolarSystem => solar_system(center),
         Scenario::FigureEight => figure_eight(center),
+        Scenario::Circumbinary => circumbinary(center),
+        Scenario::Trojan => trojan(center),
+        Scenario::Slingshot => slingshot(center),
         Scenario::RandomSwarm(params) => random_swarm(params, center),
         Scenario::RandomNBody(params) => random_n_body(params, center),
     }
@@ -416,6 +533,12 @@ impl Simulation {
                 let outer = SOLAR_PLANETS[SOLAR_PLANETS.len() - 1].0;
                 base.max(outer * WORLD_EXTENT_MARGIN)
             }
+            Scenario::Circumbinary => {
+                let outer = CIRCUMBINARY_PLANETS[CIRCUMBINARY_PLANETS.len() - 1].0;
+                base.max(outer * WORLD_EXTENT_MARGIN)
+            }
+            Scenario::Trojan => base.max(TROJAN_ORBIT_RADIUS * WORLD_EXTENT_MARGIN),
+            Scenario::Slingshot => base.max(-SLINGSHOT_START_X * WORLD_EXTENT_MARGIN),
             _ => base,
         }
     }
