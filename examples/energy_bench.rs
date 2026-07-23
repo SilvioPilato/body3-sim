@@ -9,17 +9,21 @@
 // of the render path, so measuring it headless keeps the run fast and clean
 // and never distorts a frame-time benchmark. Usage:
 //
-//   cargo run --release --example energy_bench -- [n] [steps] [sample_every]
+//   cargo run --release --example energy_bench -- [n] [steps] [sample_every] [dt]
 //
-// Defaults: n=44000, steps=300, sample_every=30 (~11 samples). time_scale=1.0
-// so each update(physics_dt) runs exactly one Verlet substep (deterministic,
-// matches examples/profile_workload.rs methodology).
+// Defaults: n=44000, steps=300, sample_every=30, dt=0.005. time_scale=1.0 so
+// each update(dt) runs exactly one Verlet substep (deterministic, matches
+// examples/profile_workload.rs methodology). To compare energy across dt
+// values at equal simulated time, pick steps = round(T / dt) for a fixed T.
+
+use std::time::Instant;
 
 use body3_sim::simulation::{Scenario, Simulation, SimulationConfig};
 
 const DEFAULT_N: usize = 44_000;
 const DEFAULT_STEPS: u32 = 300;
 const DEFAULT_SAMPLE_EVERY: u32 = 30;
+const DEFAULT_DT: f32 = 0.005;
 
 struct Sample {
     step: u32,
@@ -63,21 +67,27 @@ fn main() {
         .parse()
         .unwrap_or(DEFAULT_SAMPLE_EVERY)
         .max(1);
+    let dt: f32 = parse_arg(3, &args, &DEFAULT_DT.to_string()).parse().unwrap_or(DEFAULT_DT);
 
     let mut sim = Simulation::new(SimulationConfig {
         scenario: Scenario::CentralSwarm { swarm_size: n },
+        physics_dt: dt,
         time_scale: 1.0,
         ..SimulationConfig::default()
     });
 
     let mut samples: Vec<Sample> = Vec::new();
     samples.push(sample(&sim, 0));
+    let t0 = Instant::now();
     for step in 1..=steps {
         sim.update(sim.config().physics_dt);
         if step % sample_every == 0 {
             samples.push(sample(&sim, step));
         }
     }
+    let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let ms_per_step = wall_ms / steps as f64;
+    let sim_time = steps as f32 * dt;
 
     let exact_vals: Vec<f64> = samples.iter().map(|s| s.exact as f64).collect();
     let approx_vals: Vec<f64> = samples.iter().map(|s| s.approx as f64).collect();
@@ -90,7 +100,7 @@ fn main() {
         .collect();
 
     println!(
-        "energy_bench: n={n} steps={steps} sample_every={sample_every} ({} samples, theta={})",
+        "energy_bench: n={n} steps={steps} sample_every={sample_every} dt={dt} ({} samples, theta={}, sim_time={sim_time:.4}s wall={wall_ms:.1}ms {ms_per_step:.2}ms/step)",
         samples.len(),
         sim.config().theta_threshold
     );
