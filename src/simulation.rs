@@ -110,7 +110,7 @@ impl Default for SimulationConfig {
     fn default() -> Self {
         Self {
             scenario: Scenario::CentralSwarm { swarm_size: 1000 },
-            screen_size: 800.0,
+            screen_size: 1000.0,
             physics_dt: 0.005,
             time_scale: 0.3,
             theta_threshold: crate::physics::DEFAULT_TETHA_THRESHOLD,
