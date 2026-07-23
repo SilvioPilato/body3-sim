@@ -38,9 +38,31 @@ pub enum Scenario {
     DualCircle,
     TriangleCircle,
     Burrau1913,
+    SolarSystem,
+    FigureEight,
     RandomSwarm(RandomSwarmParams),
     RandomNBody(RandomNBodyParams),
 }
+
+// SolarSystem: a heavy central star plus planets on circular orbits at
+// increasing radii. (orbital radius, mass) per planet, inner to outer.
+const SOLAR_SUN_MASS: f32 = 40_000.0;
+const SOLAR_PLANETS: [(f32, f32); 6] = [
+    (90.0, 8.0),
+    (150.0, 20.0),
+    (220.0, 30.0),
+    (300.0, 25.0),
+    (390.0, 40.0),
+    (470.0, 15.0),
+];
+
+// FigureEight: the Chenciner-Montgomery three-body choreography (three equal
+// masses chasing each other along a figure-8). The canonical initial condition
+// is stated for G=1, m=1, length ~1; we rescale it to our GRAVITY and on-screen
+// size. Under position -> L*r, mass -> m, the orbit shape is preserved if
+// velocity -> sqrt(GRAVITY*m/L) * v (time rescales by sqrt(L^3/(GRAVITY*m))).
+const FIG8_SCALE: f32 = 150.0;
+const FIG8_MASS: f32 = 50.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RandomSwarmParams {
@@ -209,6 +231,52 @@ fn burrau_1913(center: Vec2) -> Vec<PhysicsObject> {
     vec![obj_a, obj_b, obj_c]
 }
 
+fn solar_system(center: Vec2) -> Vec<PhysicsObject> {
+    let golden_angle = TAU * 0.618_034_f32;
+    let mut planets: Vec<PhysicsObject> = Vec::with_capacity(SOLAR_PLANETS.len());
+    // Planets are spread by the golden angle, so their momenta don't cancel;
+    // give the sun the counter-momentum so the whole system stays centered
+    // instead of drifting off-screen.
+    let mut planet_momentum = Vec2::ZERO;
+    for (i, &(radius, mass)) in SOLAR_PLANETS.iter().enumerate() {
+        let angle = golden_angle * i as f32;
+        let dir = Vec2 { x: angle.cos(), y: angle.sin() };
+        let position = center + dir * radius;
+        let speed = (GRAVITY * SOLAR_SUN_MASS / radius).sqrt();
+        let velocity = Vec2 { x: -dir.y, y: dir.x } * speed; // prograde tangent
+        planet_momentum += velocity * mass;
+        planets.push(PhysicsObject { position, velocity, mass });
+    }
+
+    let mut objects = Vec::with_capacity(SOLAR_PLANETS.len() + 1);
+    objects.push(PhysicsObject {
+        position: center,
+        velocity: -planet_momentum / SOLAR_SUN_MASS,
+        mass: SOLAR_SUN_MASS,
+    });
+    objects.extend(planets);
+    objects
+}
+
+fn figure_eight(center: Vec2) -> Vec<PhysicsObject> {
+    // Canonical Chenciner-Montgomery initial condition (G=1, m=1, length ~1).
+    let r1 = Vec2 { x: 0.970_004_36, y: -0.243_087_53 };
+    let v3 = Vec2 { x: -0.932_407_37, y: -0.864_731_46 };
+    let v12 = -v3 * 0.5; // bodies 1 and 2 share this velocity; total momentum is 0
+
+    let v_scale = (GRAVITY * FIG8_MASS / FIG8_SCALE).sqrt();
+    let body = |r: Vec2, v: Vec2| PhysicsObject {
+        position: center + r * FIG8_SCALE,
+        velocity: v * v_scale,
+        mass: FIG8_MASS,
+    };
+    vec![
+        body(r1, v12),
+        body(-r1, v12),
+        body(Vec2::ZERO, v3),
+    ]
+}
+
 fn random_swarm(params: &RandomSwarmParams, center: Vec2) -> Vec<PhysicsObject> {
     srand(params.seed);
     let central_mass = gen_range(params.central_mass_range.0, params.central_mass_range.1);
@@ -259,6 +327,8 @@ fn build_scenario(scenario: &Scenario, center: Vec2) -> Vec<PhysicsObject> {
         Scenario::DualCircle => dual_circle(center),
         Scenario::TriangleCircle => triangle_circle(center),
         Scenario::Burrau1913 => burrau_1913(center),
+        Scenario::SolarSystem => solar_system(center),
+        Scenario::FigureEight => figure_eight(center),
         Scenario::RandomSwarm(params) => random_swarm(params, center),
         Scenario::RandomNBody(params) => random_n_body(params, center),
     }
@@ -342,6 +412,10 @@ impl Simulation {
                 base.max(central_swarm_radii(*swarm_size).1 * WORLD_EXTENT_MARGIN)
             }
             Scenario::RandomSwarm(params) => base.max(params.radius_range.1 * WORLD_EXTENT_MARGIN),
+            Scenario::SolarSystem => {
+                let outer = SOLAR_PLANETS[SOLAR_PLANETS.len() - 1].0;
+                base.max(outer * WORLD_EXTENT_MARGIN)
+            }
             _ => base,
         }
     }

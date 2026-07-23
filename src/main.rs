@@ -88,16 +88,20 @@ enum ScenarioKind {
     DualCircle,
     TriangleCircle,
     Burrau1913,
+    SolarSystem,
+    FigureEight,
     RandomSwarm,
     RandomNBody,
 }
 
 impl ScenarioKind {
-    const ALL: [ScenarioKind; 6] = [
+    const ALL: [ScenarioKind; 8] = [
         ScenarioKind::CentralSwarm,
         ScenarioKind::DualCircle,
         ScenarioKind::TriangleCircle,
         ScenarioKind::Burrau1913,
+        ScenarioKind::SolarSystem,
+        ScenarioKind::FigureEight,
         ScenarioKind::RandomSwarm,
         ScenarioKind::RandomNBody,
     ];
@@ -108,6 +112,8 @@ impl ScenarioKind {
             ScenarioKind::DualCircle => "Dual Circle",
             ScenarioKind::TriangleCircle => "Triangle Circle",
             ScenarioKind::Burrau1913 => "Burrau 1913",
+            ScenarioKind::SolarSystem => "Solar System",
+            ScenarioKind::FigureEight => "Figure Eight",
             ScenarioKind::RandomSwarm => "Random Swarm",
             ScenarioKind::RandomNBody => "Random N-Body",
         }
@@ -119,6 +125,8 @@ impl ScenarioKind {
             Scenario::DualCircle => ScenarioKind::DualCircle,
             Scenario::TriangleCircle => ScenarioKind::TriangleCircle,
             Scenario::Burrau1913 => ScenarioKind::Burrau1913,
+            Scenario::SolarSystem => ScenarioKind::SolarSystem,
+            Scenario::FigureEight => ScenarioKind::FigureEight,
             Scenario::RandomSwarm(_) => ScenarioKind::RandomSwarm,
             Scenario::RandomNBody(_) => ScenarioKind::RandomNBody,
         }
@@ -130,6 +138,8 @@ impl ScenarioKind {
             ScenarioKind::DualCircle => Scenario::DualCircle,
             ScenarioKind::TriangleCircle => Scenario::TriangleCircle,
             ScenarioKind::Burrau1913 => Scenario::Burrau1913,
+            ScenarioKind::SolarSystem => Scenario::SolarSystem,
+            ScenarioKind::FigureEight => Scenario::FigureEight,
             ScenarioKind::RandomSwarm => Scenario::RandomSwarm(RandomSwarmParams::default()),
             ScenarioKind::RandomNBody => Scenario::RandomNBody(RandomNBodyParams::default()),
         }
@@ -182,7 +192,11 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
                 Scenario::CentralSwarm { swarm_size } => {
                     ui.add(egui::Slider::new(swarm_size, CENTRAL_SWARM_SIZE_RANGE).text("swarm_size"));
                 }
-                Scenario::DualCircle | Scenario::TriangleCircle | Scenario::Burrau1913 => {
+                Scenario::DualCircle
+                | Scenario::TriangleCircle
+                | Scenario::Burrau1913
+                | Scenario::SolarSystem
+                | Scenario::FigureEight => {
                     ui.label("Fixed preset, no parameters.");
                 }
                 Scenario::RandomSwarm(params) => {
