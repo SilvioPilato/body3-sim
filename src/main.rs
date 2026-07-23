@@ -290,10 +290,20 @@ async fn main() {
             viewport: Some((0, 0, screen_size as i32, screen_size as i32)),
             ..Default::default()
         });
-        // Compensate dot size: 5 screen px regardless of zoom level.
-        let dot_radius = 5.0 * (world_size / screen_size);
+        // Compensate dot size: ~6 screen px regardless of zoom level. Use
+        // draw_rectangle (6 verts) instead of draw_circle (~30 verts/body):
+        // at n=44000 circle tessellation dominates the draw cost (~23ms) on CPU
+        // vertex gen + upload; a ~6px square is indistinguishable from a point at
+        // that size and visibly lighter than 10px. WASM-identical API (WebGL batch path unchanged).
+        let dot_side = 6.0 * (world_size / screen_size);
         for (obj, color) in sim.objects().iter().zip(colors.iter()) {
-            draw_circle(obj.position.x, obj.position.y, dot_radius, *color);
+            draw_rectangle(
+                obj.position.x - dot_side * 0.5,
+                obj.position.y - dot_side * 0.5,
+                dot_side,
+                dot_side,
+                *color,
+            );
         }
         set_default_camera();
         draw_text(&format!("FPS: {}", get_fps()), 10.0, 20.0, 20.0, WHITE);
