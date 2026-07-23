@@ -163,15 +163,13 @@ impl<'a> Quadtree<'a> {
 }
 
 // Root center and half-size that provably contain every body. `insert` has no
-// bounds check by design (it is the hot path), so the root must be correct by
-// construction: a body outside it is filed into a corner quadrant, and the
-// node summaries it lands in then misdescribe its position for every
-// opening-angle test in the walk.
+// bounds check (it's the hot path), so a body outside the root gets filed
+// into the wrong corner and misdescribes every opening-angle test that node
+// participates in.
 //
-// Non-finite positions are skipped rather than propagated — an infinite root
-// would collapse the tree to a single leaf and quietly turn the walk into
-// O(n^2). The floor keeps the half-size positive for coincident or empty
-// input, where the extent is zero.
+// Non-finite positions are skipped rather than propagated (an infinite root
+// would collapse the tree to one leaf, turning the walk into O(n^2)); the
+// floor keeps half-size positive for coincident or empty input.
 pub fn fitting_root(objects: &[PhysicsObject]) -> (Vec2, f32) {
     const MARGIN: f32 = 1.01;
     const MIN_HALF_SIZE: f32 = 1.0;

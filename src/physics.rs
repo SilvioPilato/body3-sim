@@ -7,20 +7,16 @@ use crate::quadtree::{Quadtree, WalkDecision};
 pub const GRAVITY: f32 = 100_000.0;
 
 // Plummer softening replaces the bare 1/r^2 singularity with
-// 1/(r^2 + softening^2), capping the peak close-encounter force at
-// ~GRAVITY*m/softening^2 and the potential-well depth at ~GRAVITY*m/softening.
-// That bounds the smallest resolvable encounter timescale to
-// ~sqrt(softening^3 / (GRAVITY*m)); fixed-dt Verlet stays symplectic (energy
-// conserved) only while that timescale >= dt.
+// 1/(r^2 + softening^2), capping the peak close-encounter force and bounding
+// the smallest resolvable encounter timescale to ~sqrt(softening^3/(G*m)).
+// Fixed-dt Verlet stays symplectic (energy conserved) only while that
+// timescale >= dt.
 //
-// The mass in that expression is the mass of the body being encountered, and
-// the binding encounter for every swarm orbiter is with the CORE (20000), not
-// with another light body (1.0). Evaluating the criterion at the light mass —
-// as this file previously did — understates the required softening by ~220x
-// at the production dt, and the resulting energy injection is what made
-// swarms fly apart (+54% energy over 10 simulated seconds at n=1000; see
-// examples/stability_sweep.rs). Callers derive their softening from
-// `min_softening` via `simulation::integration_params` instead of hardcoding.
+// `mass` must be the mass of the body being encountered — for a swarm
+// orbiter that's the core, not another light body. Undershooting it
+// understates the required softening and injects energy (see
+// examples/stability_sweep.rs). Callers get this from `min_softening` via
+// `simulation::integration_params` instead of hardcoding it.
 pub fn min_softening(dt: f32, mass: f32) -> f32 {
     (dt * dt * GRAVITY * mass).cbrt()
 }
@@ -42,27 +38,11 @@ pub struct PhysicsObject {
     pub mass: f32,
 }
 
-pub struct Physics {
-
-}
-pub struct EulerSimple;
+pub struct Physics;
 pub struct Verlet;
 
 pub trait PhysicsSystem {
     fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32, theta: f32, softening: f32) -> Rc<Vec<PhysicsObject>>;
-}
-
-impl PhysicsSystem for EulerSimple {
-    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32, theta: f32, softening: f32) -> Rc<Vec<PhysicsObject>> {
-        let mut objects = (*objects).clone();
-        let accelerations = Physics::compute_accelerations(&objects, center, half_size, theta, softening);
-        for (obj, accelleration) in objects.iter_mut().zip(accelerations.iter()) {
-            obj.velocity += *accelleration * dt;
-            obj.position += obj.velocity * dt;
-        }
-        
-        Rc::new(objects)
-    }
 }
 
 impl PhysicsSystem for Verlet {
@@ -73,15 +53,11 @@ impl PhysicsSystem for Verlet {
 }
 
 impl Verlet {
-// Same integration as `execute`, but accepts the previous step's acc_new
-    // as this step's acc_old instead of recomputing it. Force only depends on
-    // position, and acc_new(t) is evaluated at the exact position acc_old(t+1)
-    // would be evaluated at (nothing moves between one step's end and the next
-    // step's start) — so the positions are exact. The tree, however, is refit
-    // each substep (Simulation::update), so the reused value came from a
-    // slightly different root than the one this step would have built: it
-    // stays a valid Barnes-Hut evaluation at the right positions, not a
-    // bit-identical one. Pass `None` on the first call.
+    // Same integration as `execute`, but accepts the previous step's acc_new
+    // as this step's acc_old instead of recomputing it — valid because
+    // nothing moves between one step's end and the next step's start, so
+    // acc_new(t) was evaluated at the exact position acc_old(t+1) needs.
+    // Pass `None` on the first call.
     pub fn execute_cached(
         objects: Rc<Vec<PhysicsObject>>,
         dt: f32,
@@ -129,18 +105,10 @@ impl Physics {
         kinetic + potential
     }
 
-    // Same Barnes-Hut approximation already trusted for compute_accelerations
-    // (same tree, same `theta` opening-angle test), applied to potential
-    // energy instead of force. O(n log n) instead of exact total_energy's
-    // O(n^2), and — unlike Monte Carlo pair sampling — deterministic: no
-    // run-to-run variance, no risk of missing a dominant close encounter or
-    // flipping sign.
-    //
-    // Each unordered pair/cluster interaction is encountered from both
-    // sides (body i's walk treats {i,cluster-containing-j} the same way
-    // body j's walk treats {j,cluster-containing-i}), so walk_potential's
-    // raw sum double-counts everything uniformly; total_energy_approx
-    // halves it once at the end to correct for that.
+    // Same Barnes-Hut tree/theta test as compute_accelerations, applied to
+    // potential energy: O(n log n) instead of exact total_energy's O(n^2).
+    // walk_potential visits each pair from both sides, so its raw sum
+    // double-counts everything uniformly; halved once at the end here.
     pub fn total_energy_approx(objects: &[PhysicsObject], center: Vec2, half_size: f32, theta: f32, softening: f32) -> f32 {
         let kinetic: f32 = objects
             .iter()
@@ -201,7 +169,6 @@ impl Physics {
             let mut acc = Vec2::ZERO;
             tree.root.walk(&mut |node| {
                 if let Some(indices) = node.indices {
-                    // foglia: forza diretta, i è catturato dalla closure
                     for &j in indices {
                         if j != i {
                             acc += Physics::compute_acceleration(objects[i].position, objects[j].position, objects[j].mass, softening);

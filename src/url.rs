@@ -51,14 +51,11 @@ fn parse_scenario(name: &str) -> Option<Scenario> {
 /// Empty string means "all default values".
 ///
 /// Deltas are measured against the config's *own canonical form*
-/// (`for_scenario(config.scenario)`), not against `SimulationConfig::default()`.
-/// `for_scenario` derives `physics_dt`/`softening` from the scenario via the
-/// stability criterion, so a fresh `for_scenario(X)` round-trips to just
-/// `scenario=X` — those derived fields are only emitted if the caller overrode
-/// them. Scenario sub-parameters (swarm_size, mass ranges, …) are likewise
-/// compared against the per-variant base returned by `parse_scenario`, so an
-/// override on `GalaxyCollision`/`RandomSwarm`/`RandomNBody` is emitted even
-/// though `SimulationConfig::default()` is a `CentralSwarm`.
+/// (`for_scenario(config.scenario)`), not against `SimulationConfig::default()`
+/// — so a fresh `for_scenario(X)` round-trips to just `scenario=X`, and a
+/// scenario's derived `physics_dt`/`softening` are only emitted if overridden.
+/// Scenario sub-parameters are compared the same way, against the per-variant
+/// base from `parse_scenario`.
 pub fn encode(config: &SimulationConfig) -> String {
     let default = SimulationConfig::default();
     let mut parts: Vec<String> = Vec::new();
@@ -234,12 +231,9 @@ pub fn decode(query: &str) -> Option<SimulationConfig> {
 // ---- wasm <-> window bridge ----
 // These touch the browser API and exist only under wasm32. They use extern
 // "C" FFI hooks (no wasm-bindgen) because macroquad's own bootstrap.js does
-// not provide the wasm-bindgen runtime namespace — adding it would require a
-// second JS layer and break the single-loader macroquad model. Instead, a
-// small `url_plugin` registered via `miniquad_add_plugin` in index.html
-// provides three env hooks: `url_read_query`, `url_write_query`,
-// `url_copy_link`. Each takes a wasm-memory pointer + length and returns a
-// pointer (allocated via `wasm_exports.allocate_vec_u8`) for string returns.
+// not provide the wasm-bindgen runtime namespace. A small `url_plugin`
+// registered via `miniquad_add_plugin` in index.html provides three env
+// hooks: `url_read_query`, `url_write_query`, `url_copy_link`.
 //
 // On native these helpers don't exist; main.rs gates the calls behind
 // `#[cfg(target_arch = "wasm32")]` so the linker never sees them.
@@ -251,26 +245,11 @@ unsafe extern "C" {
     fn url_copy_link(ptr: usize, len: usize);
 }
 
-// Above extern returns a pointer-to-pointer layout: the first 4 bytes are the
-// length, the next `len` bytes are the UTF-8 string, both in a `Vec<u8>`
-// allocated on the wasm side via `wasm_exports.allocate_vec_u8` from the JS
-// plugin. The plugin also exposes `url_free_vec` to release that memory.
-// But macroquad's existing `js_create_string` infra in `sapp_jsutils` already
-// handles this: a JavaScript-side string can be allocated via
-// `wasm_exports.allocate_vec_u8` and read back through the wasm memory. We
-// piggyback on that pattern.
-//
-// Concretely: each JS-side hook returns a (ptr, len) pair encoded as a single
-// usize where the high 32 bits are ptr and low 32 bits are len. This packs in
-// one i64 on the wasm side and is easy to unpack in Rust.
-
+// url_read_query's return value points at a u32 length prefix immediately
+// followed by the UTF-8 bytes — the same convention as macroquad's
+// `fs_take_buffer`, allocated JS-side via `wasm_exports.allocate_vec_u8`.
 #[cfg(target_arch = "wasm32")]
 fn unpack_ptr_len(packed: usize) -> (usize, usize) {
-    // packed is u64 as usize on wasm32 (usize is actually 32 bits there but
-    // the JS plugin returns a BigInt that wasm-bindgen-less code converts via
-    // Number. Use a simpler scheme: the JS hook writes the length to
-    // `wasm_memory.buffer` at the returned pointer, immediately followed by
-    // the UTF-8 bytes — same convention as macroquad's `fs_take_buffer`.
     let len_ptr = packed as *const u32;
     let len = unsafe { *len_ptr } as usize;
     (packed + 4, len)

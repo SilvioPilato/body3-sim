@@ -9,15 +9,14 @@ use crate::physics::PhysicsObject;
 
 // Exact total-energy computation off the render thread. The render loop calls
 // `request()` with an immutable snapshot at whatever cadence it likes, and
-// `try_recv()` every frame; the computation itself happens on a background
-// thread (native) so the ~1s O(n^2) cost at large n never stalls rendering.
+// `try_recv()` every frame; the computation runs on a background thread
+// (native) so the ~1s O(n^2) cost at large n never stalls rendering.
 //
-// WASM note: the wasm backend below is a documented no-op stub
-// (try_recv always None, request ignored) because std::thread is unavailable
-// without SharedArrayBuffer. The deployed site (docs/web-deploy.md) serves
-// COOP/COEP headers, so a future wasm backend can wire
-// wasm-bindgen-rayon into this same struct API — main.rs would not change,
-// only the `#[cfg(target_arch = "wasm32")]` request/try_recv bodies.
+// On wasm32 this is a no-op stub (request ignored, try_recv always None):
+// std::thread is unavailable without SharedArrayBuffer. The deployed site
+// serves COOP/COEP headers (docs/web-deploy.md), so a future wasm backend
+// could wire wasm-bindgen-rayon into this same struct API without touching
+// main.rs.
 pub struct EnergyWorker {
     #[cfg(not(target_arch = "wasm32"))]
     rx: Option<mpsc::Receiver<f32>>,

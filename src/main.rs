@@ -3,21 +3,13 @@ use egui_macroquad::egui;
 use macroquad::prelude::*;
 
 const SIDEBAR_WIDTH: f32 = 280.0;
-// total_energy() is exact O(n^2) (all-pairs potential) — recomputing it on
-// the render thread at large swarm sizes (~1.1s at n=44000, measured) stalls
-// rendering, so it is offloaded to a background worker (see `energy_worker`
-// usage in main below); the exact value updates asynchronously when the
-// result arrives. Physics::total_energy_approx (Barnes-Hut tree walk) exists
-// as a faster alternative but stays unusable at the high-n regime where speed
-// matters: its error grows with PAIR AGGREGATION COUNT, not density —
-// measured via examples/energy_theta_sweep at ~0.5% @ n=500, ~30% @ n=8000,
-// ~185% @ n=44000 (theta=1.8, post density-fix). Sweeping theta only moves it
-// ~10-20%; the n-growth is intrinsic. So it is not wired into the UI.
-// Baseline interval tuned for this codebase's default swarm_size (1000);
-// energy_log_interval scales it up at larger n. With the worker in place the
-// interval only throttles how often a NEW snapshot is requested — a request
-// is dropped if the previous computation is still in flight, which at
-// n>=~16000 means effectively one computation at a time.
+// total_energy() is exact O(n^2) (~1.1s at n=44000), so it runs on a
+// background worker (see `energy_worker` below) instead of the render
+// thread. Physics::total_energy_approx (Barnes-Hut) would be fast enough,
+// but its error grows with n regardless of theta (measured via
+// examples/energy_theta_sweep: ~0.5% @ n=500, ~185% @ n=44000), so it's not
+// wired into the UI. Baseline interval tuned for the default swarm_size
+// (1000); energy_log_interval scales it up at larger n.
 const ENERGY_LOG_INTERVAL_FRAMES: u64 = 30;
 
 fn energy_log_interval(swarm_size: usize) -> u64 {
@@ -297,7 +289,7 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
 
             ui.separator();
 
-            if ui.button("Applica").clicked() {
+            if ui.button("Apply").clicked() {
                 sim.reset(*pending);
                 #[cfg(target_arch = "wasm32")]
                 body3_sim::url::write_url_query(&body3_sim::url::encode(pending));
@@ -398,13 +390,12 @@ async fn main() {
         }
         frame_count += 1;
 
-        // Zoom-to-fit, re-evaluated every frame: the static
-        // Simulation::world_half_size only covers the SPAWN extent, but the
-        // system expands past it at runtime (ejected bodies, core-collapse
-        // rebound), which is what used to push bodies off-screen. CameraFit
-        // tracks the center of mass and the 98th-percentile radius instead,
-        // floored at world_half_size so no preset ever zooms in past its
-        // original framing — the camera only reacts by zooming out.
+        // Zoom-to-fit, re-evaluated every frame: Simulation::world_half_size
+        // only covers the spawn extent, but the system expands past it at
+        // runtime (ejected bodies, core-collapse rebound). CameraFit tracks
+        // the center of mass and 98th-percentile radius instead, floored at
+        // world_half_size so no preset ever zooms in past its original
+        // framing.
         let screen_size = sim.config().screen_size;
         camera_fit.update(sim.objects(), get_frame_time());
         let world_size = camera_fit.half_size() * 2.0;
@@ -414,11 +405,10 @@ async fn main() {
             viewport: Some((0, 0, screen_size as i32, screen_size as i32)),
             ..Default::default()
         });
-        // Compensate dot size: ~6 screen px regardless of zoom level. Use
+        // Compensate dot size: ~6 screen px regardless of zoom level.
         // draw_rectangle (6 verts) instead of draw_circle (~30 verts/body):
-        // at n=44000 circle tessellation dominates the draw cost (~23ms) on CPU
-        // vertex gen + upload; a ~6px square is indistinguishable from a point at
-        // that size and visibly lighter than 10px. WASM-identical API (WebGL batch path unchanged).
+        // at n=44000 circle tessellation dominates draw cost (~23ms), and a
+        // ~6px square reads as a point at that size.
         let dot_side = 6.0 * (world_size / screen_size);
         for (obj, color) in sim.objects().iter().zip(colors.iter()) {
             draw_rectangle(

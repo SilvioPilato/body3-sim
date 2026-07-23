@@ -3,12 +3,10 @@ use macroquad::math::Vec2;
 use crate::physics::PhysicsObject;
 
 // Fraction of bodies the view is required to contain. Deliberately not 1.0:
-// once a swarm starts ejecting bodies (see the underspeed spawn issue in
-// `central_swarm`), a handful of escapers run off to arbitrary distance and
-// fitting the true bounding box would zoom the whole cluster down to a few
-// pixels. Cutting at the 98th percentile keeps the view sized by the bulk of
-// the system and lets the outliers leave the frame, which is the correct
-// trade: they carry no visual information once they are unbound.
+// once a swarm starts ejecting bodies, a handful of escapers run off to
+// arbitrary distance and fitting the true bounding box would zoom the whole
+// cluster down to a few pixels. Cutting at the 98th percentile keeps the
+// view sized by the bulk of the system and lets outliers leave the frame.
 pub const FIT_PERCENTILE: f32 = 0.98;
 
 // Breathing room around the fitted radius so bodies near the percentile
@@ -84,10 +82,10 @@ impl CameraFit {
         self.half_size += (target_half - self.half_size) * t;
     }
 
-    // Fitted (center, half_size) for the current configuration, or None if the
-    // input cannot produce a usable view (empty, massless, or non-finite
-    // positions — the latter can happen if the integration diverges, and
-    // holding the previous view beats propagating NaN into the projection).
+    // Fitted (center, half_size), or None if the input can't produce a
+    // usable view (empty, massless, or non-finite positions — the latter can
+    // happen if the integration diverges; holding the previous view beats
+    // propagating NaN into the projection).
     fn target(&mut self, objects: &[PhysicsObject]) -> Option<(Vec2, f32)> {
         if objects.is_empty() {
             return None;

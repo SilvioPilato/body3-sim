@@ -12,12 +12,10 @@ use crate::physics::{GRAVITY, Physics, PhysicsObject};
 // frame, causing a visible stutter.
 const MAX_FRAME_TIME: f32 = 0.1;
 
-// Reference swarm_size at which the annulus is [MIN_RADIUS, MAX_RADIUS].
-// Both bounds scale with sqrt(n / REF_N) so the annulus area grows
-// proportionally to n and spawn density (bodies/area) stays constant.
-// Constant density keeps the Barnes-Hut opening-angle geometry scale-invariant:
-// without it, packing more bodies into a fixed area makes the force walk
-// degrade past O(n log n) (measured: ~169x vs ~103x predicted, n=1000->64000).
+// Reference swarm_size at which the annulus is [MIN_RADIUS, MAX_RADIUS]. Both
+// bounds scale with sqrt(n / REF_N) so the annulus area grows proportionally
+// to n and spawn density (bodies/area) stays constant — which keeps the
+// Barnes-Hut opening-angle geometry, and its O(n log n) scaling, invariant.
 const CENTRAL_SWARM_REF_N: f32 = 1000.0;
 const CENTRAL_SWARM_MIN_RADIUS: f32 = 60.0;
 const CENTRAL_SWARM_MAX_RADIUS: f32 = 280.0;
@@ -36,20 +34,17 @@ pub fn central_swarm_radii(n: usize) -> (f32, f32) {
     (CENTRAL_SWARM_MIN_RADIUS * scale, CENTRAL_SWARM_MAX_RADIUS * scale)
 }
 
-// The symplectic criterion (physics::min_softening) ties dt and softening
-// together, leaving exactly one free choice. Pick dt by COST: the force
-// evaluation is trivial at a handful of bodies, so few-body presets can afford
-// a tiny timestep and therefore a small, geometry-preserving softening; swarms
-// cannot, so they take a large dt and pay for it with a large softening. That
-// large softening is only self-consistent because swarm orbits are built from
-// the measured force field (see `circularize`), not from an analytic Kepler
-// speed that ignores it.
+// physics::min_softening ties dt and softening together, leaving one free
+// choice: pick dt by cost. Force evaluation is trivial for a handful of
+// bodies, so few-body presets afford a tiny dt and a small, geometry-preserving
+// softening; swarms can't, so they take a large dt and pay for it with a
+// large softening — self-consistent only because swarm orbits are built from
+// the measured force field (see `circularize`), not an analytic Kepler speed.
 const FEW_BODY_MAX: usize = 100;
 const FEW_BODY_DT: f32 = 1.0e-4;
 const SWARM_DT: f32 = 0.005;
-// Margin above the criterion's equality point. The sweep in
-// examples/stability_sweep.rs is clean from ~32 upward at dt=0.005 where the
-// criterion predicts 36.8, so a modest margin is enough.
+// Margin above min_softening's equality point (examples/stability_sweep.rs
+// is clean from ~32 upward at dt=0.005, where the criterion predicts 36.8).
 const SOFTENING_SAFETY: f32 = 1.2;
 
 /// Number of bodies `build_scenario` will produce. Drives the timestep choice.
@@ -214,19 +209,15 @@ pub struct SimulationConfig {
     pub screen_size: f32,
     pub physics_dt: f32,
     pub time_scale: f32,
-    // Barnes-Hut opening-angle threshold. Larger values coarsen the force
-    // approximation (aggregate more aggressively) for better O(n log n)
-    // scaling; smaller values stay closer to exact O(n^2) pairwise forces.
-    // Default 1.8 (DEFAULT_TETHA_THRESHOLD) restores O(n log n) walk_forces scaling
-    // (measured 103.6x n=1000->64000 vs 102.5x prediction) while staying more
-    // accurate than theta=2.0; overridable
-    // from benches/tests/explicit configs but not exposed as a UI slider.
+    // Barnes-Hut opening-angle threshold: larger coarsens the force
+    // approximation for better O(n log n) scaling, smaller stays closer to
+    // exact O(n^2). Default is DEFAULT_TETHA_THRESHOLD; overridable from
+    // benches/tests but not exposed as a UI slider.
     pub theta_threshold: f32,
     // Plummer softening length (see physics::DEFAULT_SOFTENING). Caps the
-    // close-encounter force so fixed-dt Verlet stays energy-stable; too small
-    // and close passes inject spurious energy (divergence), too large and the
-    // far-field dynamics blur. Default 1.0. Threaded through the physics call
-    // chain; overridable from benches/tests/sweeps but not a UI slider.
+    // close-encounter force so fixed-dt Verlet stays energy-stable: too small
+    // and close passes inject spurious energy, too large and far-field
+    // dynamics blur. Overridable from benches/tests but not a UI slider.
     pub softening: f32,
 }
 
@@ -294,19 +285,15 @@ fn central_swarm_at(n: usize, center: Vec2, bulk: Vec2, theta: f32, softening: f
 }
 
 // Sets each orbiter's speed to the circular speed for the acceleration it
-// ACTUALLY feels, rather than the analytic sqrt(G*M_core/r), which ignores
-// both the swarm's own mass and the softening. Two reasons this is the
-// measured form rather than an enclosed-mass estimate:
+// ACTUALLY feels (measured via compute_accelerations), rather than the
+// analytic sqrt(G*M_core/r), which ignores the swarm's own mass and the
+// softening. The shell theorem doesn't hold in 2D with a 1/r^2 force, so an
+// enclosed-mass estimate would overestimate the required speed anyway; the
+// measured form also needs no radius-ordered indices, so it works unchanged
+// for random_swarm's randomly-drawn radii.
 //
-//   - the shell theorem does not hold in 2D with a 1/r^2 force (arc length
-//     grows as r, force falls as 1/r^2, so the near arc wins and exterior
-//     matter pulls outward instead of cancelling), so an enclosed-mass sum
-//     would systematically overestimate the required speed
-//   - it needs no radius-ordered indices, so it works unchanged for
-//     random_swarm, whose radii are drawn at random
-//
-// `objects[0]` is the core and is skipped. Velocities are ignored by the force
-// evaluation, so this may be called before or after they are set.
+// `objects[0]` is the core and is skipped. Velocities are ignored by the
+// force evaluation, so this may be called before or after they are set.
 fn circularize(objects: &mut [PhysicsObject], center: Vec2, theta: f32, softening: f32) {
     let (root_center, half_size) = crate::quadtree::fitting_root(objects);
     let acc = Physics::compute_accelerations(objects, root_center, half_size, theta, softening);
@@ -594,12 +581,9 @@ pub struct Simulation {
     world_half_size: f32,
     objects: Rc<Vec<PhysicsObject>>,
     accumulator: f32,
-    // acc_new from the last substep, reused as next substep's acc_old
-    // instead of recomputing it from scratch. Valid because positions don't
-    // move between one step's end and the next step's start, so the cached
-    // acc is at the exact positions the next step's pre-update would have
-    // evaluated it at — and `fitting_root` is deterministic in the
-    // positions, so it would have built the same tree. See `update`.
+    // acc_new from the last substep, reused as the next substep's acc_old
+    // instead of recomputing it — positions don't move between one step's
+    // end and the next step's start, so it's still valid. See `update`.
     cached_acceleration: Option<Vec<Vec2>>,
 }
 
@@ -627,13 +611,10 @@ impl Simulation {
         let softening = self.config.softening;
         while self.accumulator >= dt {
             // Inlined Verlet step (rather than Verlet::execute_cached) so the
-            // quadtree root can be refit on the POST-update positions used for
-            // acc_new, not just the pre-update positions used for acc_old.
-            // Bodies move by up to |v|*dt + 0.5*|a|*dt^2 per substep, so a root
-            // fit on pre-update can fail to contain them at the acc_new call
-            // — and Quadtree::insert has no bounds check, so the body would
-            // be silently misfiled. Fitting the root twice per substep is two
-            // O(n) passes against an O(n log n) tree build, negligible.
+            // quadtree root is refit on the POST-update positions for
+            // acc_new, not just the pre-update positions for acc_old — bodies
+            // move enough per substep that a pre-update root can fail to
+            // contain them, and Quadtree::insert has no bounds check.
             let mut objects = (*self.objects).clone();
 
             let acc_old = match self.cached_acceleration.as_deref() {
