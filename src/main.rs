@@ -306,10 +306,7 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
             if ui.button("Copy link").clicked() {
                 let url = body3_sim::url::encode(pending);
                 #[cfg(target_arch = "wasm32")]
-                {
-                    let window = web_sys::window().expect("no global window object");
-                    let _ = window.navigator().clipboard().write_text(&format!("{}?{}", window.location().href().unwrap_or_default(), url));
-                }
+                body3_sim::url::copy_link(&url);
                 #[cfg(not(target_arch = "wasm32"))]
                 println!("config url: {}", url);
             }
@@ -362,7 +359,10 @@ async fn main() {
     camera_fit.snap(sim.objects());
 
     loop {
-        let frame_start = std::time::Instant::now();
+        // macroquad's get_time() (f64 seconds), not std::time::Instant — the
+        // latter's now() is unsupported on wasm32-unknown-unknown and panics
+        // every frame in the browser.
+        let frame_start = get_time();
 
         clear_background(BLACK);
         sim.update(get_frame_time());
@@ -440,7 +440,7 @@ async fn main() {
         if benchmark_mode {
             bench_frames_seen += 1;
             if bench_frames_seen > BENCH_WARMUP_FRAMES {
-                bench_samples.push(frame_start.elapsed().as_secs_f64() * 1000.0);
+                bench_samples.push((get_time() - frame_start) * 1000.0);
             }
             if bench_samples.len() >= BENCH_FRAME_COUNT {
                 report_benchmark(&mut bench_samples, bench_swarm_size);

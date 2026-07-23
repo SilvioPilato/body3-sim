@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <title>body3-sim</title>
@@ -19,8 +19,55 @@
     </style>
   </head>
   <body>
-    <link data-trunk rel="rust" data-bin="body3-sim" data-type="main" />
-    <!-- Copies static files (the _headers below) to dist/ verbatim. -->
-    <link data-trunk rel="copy-file" href="_headers" />
+    <canvas id="glcanvas" tabindex="1"></canvas>
+    <!-- macroquad's own JS bootstrap; not wasm-bindgen. Hosted locally so the
+         site works without any external runtime dependency. -->
+    <script src="mq_js_bundle.js"></script>
+    <!-- URL bridge: registers env hooks the Rust wasm imports call
+         (url_read_query / url_write_query / url_copy_link). The string-return
+         convention mirrors macroquad's fs_load_file pattern: the JS function
+         allocates a (len, bytes) tuple in wasm memory via
+         wasm_exports.allocate_vec_u8 and returns its pointer. -->
+    <script>
+      miniquad_add_plugin({
+        register_plugin: function (import_obj) {
+          import_obj.env.url_read_query = function () {
+            const search = window.location.search || "";
+            const stripped = search.startsWith("?") ? search.slice(1) : search;
+            const len = stripped.length;
+            const ptr = wasm_exports.allocate_vec_u8(4 + len);
+            const view = new Uint8Array(wasm_memory.buffer, ptr, 4 + len);
+            new DataView(wasm_memory.buffer, ptr, 4).setUint32(0, len, true);
+            for (let i = 0; i < len; i++) view[4 + i] = stripped.charCodeAt(i);
+            return ptr;
+          };
+          import_obj.env.url_write_query = function (ptr, len) {
+            const bytes = new Uint8Array(wasm_memory.buffer, ptr, len);
+            let query = "";
+            for (let i = 0; i < len; i++) query += String.fromCharCode(bytes[i]);
+            const path = window.location.pathname;
+            const new_url = query.length === 0 ? path : path + "?" + query;
+            window.history.replaceState(null, "", new_url);
+          };
+          import_obj.env.url_copy_link = function (ptr, len) {
+            const bytes = new Uint8Array(wasm_memory.buffer, ptr, len);
+            let query = "";
+            for (let i = 0; i < len; i++) query += String.fromCharCode(bytes[i]);
+            const href = window.location.href;
+            const url = query.length === 0 ? href : href.split("?")[0] + "?" + query;
+            if (navigator.clipboard) {
+              navigator.clipboard.writeText(url).catch(function (e) { console.warn("clipboard write failed", e); });
+            } else {
+              console.warn("clipboard API unavailable");
+            }
+          };
+        },
+        version: 1,
+        name: "url_plugin"
+      });
+    </script>
+    <script>
+      load("body3-sim.wasm");
+    </script>
   </body>
 </html>

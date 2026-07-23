@@ -1,15 +1,17 @@
 # Web Deploy
 
-body3-sim runs in the browser via `trunk` + `wasm32-unknown-unknown`. Builds
-are produced locally and committed to an orphan `gh-pages` branch that
+body3-sim runs in the browser via `wasm32-unknown-unknown`. macroquad ships its
+own JS bootstrap (`mq_js_bundle.js` + `load(".wasm")`), **not** wasm-bindgen, so
+there is no `trunk` / wasm-bindgen step — the wasm is built directly with
+`cargo build` and served alongside the hand-written [`index.html`](../index.html).
+Builds are produced locally and committed to an orphan `gh-pages` branch that
 Cloudflare Pages serves.
 
 ## One-time setup
 
-1. **Install the wasm target and trunk:**
+1. **Install the wasm target:**
    ```sh
    rustup target add wasm32-unknown-unknown
-   cargo install trunk
    ```
 
 2. **Create the `gh-pages` orphan branch** (skip if it already exists):
@@ -40,13 +42,15 @@ One command from `master` (or any branch that has the source):
 ```
 
 What it does:
-1. `trunk build --release` → emits `dist/`
-2. `git worktree add _gh-pages gh-pages` (or reuses an existing one)
-3. copies `dist/` contents into the worktree
-4. `git add -A && git commit -m "deploy: <master sha>"`
-5. `git push origin gh-pages`
-6. `git worktree remove _gh-pages`
-7. Cloudflare Pages detects the push and rebuilds in 1-2 min.
+
+1. `cargo build --target wasm32-unknown-unknown --release` → emits the wasm
+2. assembles `dist/` (`index.html` + `mq_js_bundle.js` + `_headers` + `.wasm`)
+3. `git worktree add _gh-pages gh-pages` (or reuses an existing one)
+4. copies `dist/` contents into the worktree
+5. `git add -A && git commit -m "deploy: <sha>"`
+6. `git push origin gh-pages`
+7. `git worktree remove _gh-pages`
+8. Cloudflare Pages detects the push and rebuilds in 1-2 min.
 
 ## Smoke test (manual, every deploy)
 
@@ -68,6 +72,6 @@ What it does:
 - **`cargo test` fails because a test imports body3_sim::url** — make sure
   `src/lib.rs` has `pub mod url;` and `src/url.rs` exists. The tests are pure
   Rust, no wasm toolchain needed.
-- **wasm binary too large (display warning)** — `Trunk.toml`'s
+- **wasm binary too large (display warning)** — `Cargo.toml`'s
   `[profile.release] opt-level = "s"` targets size; `brotli` on Pages further
   compresses transit. Anything under 4 MB is fine.

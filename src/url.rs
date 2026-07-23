@@ -232,24 +232,66 @@ pub fn decode(query: &str) -> Option<SimulationConfig> {
 }
 
 // ---- wasm <-> window bridge ----
-// These functions touch the browser API and exist only under wasm32. The
-// native build of main.rs never calls them (gated at the call site too), so
-// they add no dead-code warnings when target_arch != "wasm32".
+// These touch the browser API and exist only under wasm32. They use extern
+// "C" FFI hooks (no wasm-bindgen) because macroquad's own bootstrap.js does
+// not provide the wasm-bindgen runtime namespace — adding it would require a
+// second JS layer and break the single-loader macroquad model. Instead, a
+// small `url_plugin` registered via `miniquad_add_plugin` in index.html
+// provides three env hooks: `url_read_query`, `url_write_query`,
+// `url_copy_link`. Each takes a wasm-memory pointer + length and returns a
+// pointer (allocated via `wasm_exports.allocate_vec_u8`) for string returns.
+//
+// On native these helpers don't exist; main.rs gates the calls behind
+// `#[cfg(target_arch = "wasm32")]` so the linker never sees them.
+
+#[cfg(target_arch = "wasm32")]
+unsafe extern "C" {
+    fn url_read_query() -> usize;
+    fn url_write_query(ptr: usize, len: usize);
+    fn url_copy_link(ptr: usize, len: usize);
+}
+
+// Above extern returns a pointer-to-pointer layout: the first 4 bytes are the
+// length, the next `len` bytes are the UTF-8 string, both in a `Vec<u8>`
+// allocated on the wasm side via `wasm_exports.allocate_vec_u8` from the JS
+// plugin. The plugin also exposes `url_free_vec` to release that memory.
+// But macroquad's existing `js_create_string` infra in `sapp_jsutils` already
+// handles this: a JavaScript-side string can be allocated via
+// `wasm_exports.allocate_vec_u8` and read back through the wasm memory. We
+// piggyback on that pattern.
+//
+// Concretely: each JS-side hook returns a (ptr, len) pair encoded as a single
+// usize where the high 32 bits are ptr and low 32 bits are len. This packs in
+// one i64 on the wasm side and is easy to unpack in Rust.
+
+#[cfg(target_arch = "wasm32")]
+fn unpack_ptr_len(packed: usize) -> (usize, usize) {
+    // packed is u64 as usize on wasm32 (usize is actually 32 bits there but
+    // the JS plugin returns a BigInt that wasm-bindgen-less code converts via
+    // Number. Use a simpler scheme: the JS hook writes the length to
+    // `wasm_memory.buffer` at the returned pointer, immediately followed by
+    // the UTF-8 bytes — same convention as macroquad's `fs_take_buffer`.
+    let len_ptr = packed as *const u32;
+    let len = unsafe { *len_ptr } as usize;
+    (packed + 4, len)
+}
 
 #[cfg(target_arch = "wasm32")]
 pub fn read_url_query() -> String {
-    let window = web_sys::window().expect("no global window object");
-    let location = window.location();
-    let search = location.search().unwrap_or_default();
-    // strip leading '?'
-    if let Some(stripped) = search.strip_prefix('?') { stripped.to_string() } else { search }
+    let packed = unsafe { url_read_query() };
+    if packed == 0 { return String::new(); }
+    let (ptr, len) = unpack_ptr_len(packed);
+    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
+    let s = String::from_utf8_lossy(bytes).into_owned();
+    s
 }
 
 #[cfg(target_arch = "wasm32")]
 pub fn write_url_query(query: &str) {
-    let window = web_sys::window().expect("no global window object");
-    let path = window.location().pathname().unwrap_or_default();
-    let new_url = if query.is_empty() { path } else { format!("{}?{}", path, query) };
-    let history = window.history().expect("no history object");
-    let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&new_url));
+    unsafe { url_write_query(query.as_ptr() as usize, query.len()); }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn copy_link(url: &str) {
+    unsafe { url_copy_link(url.as_ptr() as usize, url.len()); }
 }

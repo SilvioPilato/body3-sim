@@ -7,18 +7,8 @@ edition = "2024"
 macroquad = "0.4.15"
 egui-macroquad = "0.17.3"
 
-# wasm-only crates pulled in conditionally so `cargo test` (native) stays clean
-# (no wasm-bindgen toolchain needed on a native developer's machine).
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["Window", "Location", "History", "Navigator", "Clipboard"] }
-wasm-bindgen-rayon = { version = "1", optional = true }
-
 [features]
 default = []
-# Enables wasm-bindgen-rayon-style parallelism in physics::walk_forces when
-# COOP/COEP makes SharedArrayBuffer available. No-op on native builds.
-web-parallel = ["wasm-bindgen-rayon"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -26,3 +16,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "physics_benchmarks"
 harness = false
+
+# Size-optimize the wasm bundle for web deploy (macroquad build, no wasm-bindgen).
+[profile.release]
+opt-level = "s"
