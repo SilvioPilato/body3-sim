@@ -17,7 +17,7 @@
 use std::f32::consts::TAU;
 use std::time::Instant;
 
-use body3_sim::physics::{GRAVITY, Physics, PhysicsObject};
+use body3_sim::physics::{GRAVITY, Physics, PhysicsObject, DEFAULT_SOFTENING};
 use body3_sim::quadtree::Quadtree;
 use body3_sim::simulation::central_swarm_radii;
 
@@ -50,7 +50,7 @@ fn time_walk(objects: &[PhysicsObject], center: Vec2, half_size: f32) -> Timing 
     let mut samples: Vec<u128> = Vec::with_capacity(k as usize);
     for _ in 0..k {
         let t0 = Instant::now();
-        let _ = Physics::walk_forces(objects, &tree, DIAGNOSTIC_THETA);
+        let _ = Physics::walk_forces(objects, &tree, DIAGNOSTIC_THETA, DEFAULT_SOFTENING);
         samples.push(t0.elapsed().as_nanos());
     }
     samples.sort_unstable();

@@ -98,6 +98,12 @@ pub struct SimulationConfig {
     // accurate than theta=2.0; overridable
     // from benches/tests/explicit configs but not exposed as a UI slider.
     pub theta_threshold: f32,
+    // Plummer softening length (see physics::DEFAULT_SOFTENING). Caps the
+    // close-encounter force so fixed-dt Verlet stays energy-stable; too small
+    // and close passes inject spurious energy (divergence), too large and the
+    // far-field dynamics blur. Default 1.0. Threaded through the physics call
+    // chain; overridable from benches/tests/sweeps but not a UI slider.
+    pub softening: f32,
 }
 
 impl Default for SimulationConfig {
@@ -108,6 +114,7 @@ impl Default for SimulationConfig {
             physics_dt: 0.005,
             time_scale: 0.3,
             theta_threshold: crate::physics::DEFAULT_TETHA_THRESHOLD,
+            softening: crate::physics::DEFAULT_SOFTENING,
         }
     }
 }
@@ -289,6 +296,7 @@ impl Simulation {
                 self.center,
                 self.world_half_size,
                 self.config.theta_threshold,
+                self.config.softening,
                 self.cached_acceleration.as_deref(),
             );
             self.objects = objects;
@@ -302,11 +310,11 @@ impl Simulation {
     }
 
     pub fn total_energy(&self) -> f32 {
-        Physics::total_energy(&self.objects)
+        Physics::total_energy(&self.objects, self.config.softening)
     }
 
     pub fn total_energy_approx(&self) -> f32 {
-        Physics::total_energy_approx(&self.objects, self.center, self.world_half_size, self.config.theta_threshold)
+        Physics::total_energy_approx(&self.objects, self.center, self.world_half_size, self.config.theta_threshold, self.config.softening)
     }
 
     pub fn config(&self) -> &SimulationConfig {

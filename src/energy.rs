@@ -41,14 +41,14 @@ impl EnergyWorker {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn request(&mut self, objects: &[PhysicsObject]) {
+    pub fn request(&mut self, objects: &[PhysicsObject], softening: f32) {
         if self.busy() {
             return;
         }
         let snapshot: Vec<PhysicsObject> = objects.to_vec();
         let (tx, rx) = mpsc::channel();
         let handle = std::thread::spawn(move || {
-            let energy = Physics::total_energy(&snapshot);
+            let energy = Physics::total_energy(&snapshot, softening);
             // If the receiver was dropped (e.g. worker cancelled), ignore.
             let _ = tx.send(energy);
         });
@@ -57,7 +57,7 @@ impl EnergyWorker {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn request(&mut self, _objects: &[PhysicsObject]) {
+    pub fn request(&mut self, _objects: &[PhysicsObject], _softening: f32) {
         // wasm stub: no background compute. See struct comment.
     }
 

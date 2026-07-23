@@ -1,5 +1,5 @@
 use body3_sim::energy::EnergyWorker;
-use body3_sim::physics::Physics;
+use body3_sim::physics::{Physics, DEFAULT_SOFTENING};
 use body3_sim::simulation::{Scenario, Simulation, SimulationConfig};
 
 fn small_objects() -> Vec<body3_sim::physics::PhysicsObject> {
@@ -13,11 +13,11 @@ fn small_objects() -> Vec<body3_sim::physics::PhysicsObject> {
 #[test]
 fn worker_returns_exact_energy() {
     let objects = small_objects();
-    let expected = Physics::total_energy(&objects);
+    let expected = Physics::total_energy(&objects, DEFAULT_SOFTENING);
 
     let mut worker = EnergyWorker::new();
     assert!(!worker.busy());
-    worker.request(&objects);
+    worker.request(&objects, DEFAULT_SOFTENING);
     assert!(worker.busy());
 
     // small swarm: computation finishes well under a second; poll with a
@@ -41,11 +41,11 @@ fn worker_returns_exact_energy() {
 fn second_request_while_busy_is_dropped() {
     let objects = small_objects();
     let mut worker = EnergyWorker::new();
-    worker.request(&objects);
+    worker.request(&objects, DEFAULT_SOFTENING);
     // try to slam another request in immediately; must not panic and must not
     // replace the in-flight one. Depending on scheduling the first may already
     // be done — that's fine; just ensure no panic and eventual completion.
-    worker.request(&objects);
+    worker.request(&objects, DEFAULT_SOFTENING);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         if worker.try_recv().is_some() {

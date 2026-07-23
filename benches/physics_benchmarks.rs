@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use body3_sim::physics::{Physics, PhysicsSystem, Verlet, DEFAULT_TETHA_THRESHOLD};
+use body3_sim::physics::{Physics, PhysicsSystem, Verlet, DEFAULT_SOFTENING, DEFAULT_TETHA_THRESHOLD};
 use body3_sim::quadtree::Quadtree;
 use body3_sim::simulation::{Scenario, Simulation, SimulationConfig};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
@@ -12,6 +12,7 @@ const PHYSICS_DT: f32 = 0.005;
 // Match the production default (SimulationConfig::default().theta_threshold)
 // so bench numbers reflect what real runs experience.
 const BENCH_THETA: f32 = DEFAULT_TETHA_THRESHOLD;
+const BENCH_SOFTENING: f32 = DEFAULT_SOFTENING;
 
 fn build_sim(swarm_size: usize) -> Simulation {
     Simulation::new(SimulationConfig {
@@ -20,6 +21,7 @@ fn build_sim(swarm_size: usize) -> Simulation {
         physics_dt: PHYSICS_DT,
         time_scale: 1.0,
         theta_threshold: BENCH_THETA,
+        softening: BENCH_SOFTENING,
     })
 }
 
@@ -46,7 +48,7 @@ fn bench_walk_forces(c: &mut Criterion) {
         let half_size = sim.world_half_size();
         let tree = Quadtree::build(&objects, center, half_size);
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| Physics::walk_forces(&objects, &tree, BENCH_THETA));
+            b.iter(|| Physics::walk_forces(&objects, &tree, BENCH_THETA, BENCH_SOFTENING));
         });
     }
     group.finish();
@@ -60,7 +62,7 @@ fn bench_compute_accelerations(c: &mut Criterion) {
         let center = vec2(SCREEN_SIZE / 2.0, SCREEN_SIZE / 2.0);
         let half_size = sim.world_half_size();
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| Physics::compute_accelerations(&objects, center, half_size, BENCH_THETA));
+            b.iter(|| Physics::compute_accelerations(&objects, center, half_size, BENCH_THETA, BENCH_SOFTENING));
         });
     }
     group.finish();
@@ -74,7 +76,7 @@ fn bench_verlet_step(c: &mut Criterion) {
         let center = vec2(SCREEN_SIZE / 2.0, SCREEN_SIZE / 2.0);
         let half_size = sim.world_half_size();
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| Verlet::execute(objects.clone(), PHYSICS_DT, center, half_size, BENCH_THETA));
+            b.iter(|| Verlet::execute(objects.clone(), PHYSICS_DT, center, half_size, BENCH_THETA, BENCH_SOFTENING));
         });
     }
     group.finish();
@@ -98,9 +100,9 @@ fn bench_verlet_step_cached(c: &mut Criterion) {
         let center = vec2(SCREEN_SIZE / 2.0, SCREEN_SIZE / 2.0);
         let half_size = sim.world_half_size();
         let initial = Rc::new(sim.objects().to_vec());
-        let (warm_objects, warm_acc) = Verlet::execute_cached(initial, PHYSICS_DT, center, half_size, BENCH_THETA, None);
+        let (warm_objects, warm_acc) = Verlet::execute_cached(initial, PHYSICS_DT, center, half_size, BENCH_THETA, BENCH_SOFTENING, None);
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| Verlet::execute_cached(warm_objects.clone(), PHYSICS_DT, center, half_size, BENCH_THETA, Some(&warm_acc)));
+            b.iter(|| Verlet::execute_cached(warm_objects.clone(), PHYSICS_DT, center, half_size, BENCH_THETA, BENCH_SOFTENING, Some(&warm_acc)));
         });
     }
     group.finish();

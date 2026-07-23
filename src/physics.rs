@@ -5,7 +5,19 @@ use macroquad::math::Vec2;
 use crate::quadtree::{Quadtree, WalkDecision};
 
 pub const GRAVITY: f32 = 100_000.0;
-const SOFTENING: f32 = 0.001;
+
+// Plummer softening length. Replaces the bare 1/r^2 singularity with
+// 1/(r^2 + softening^2), capping the peak close-encounter force at
+// ~GRAVITY*m/softening^2 and the potential-well depth at ~GRAVITY*m/softening.
+// This bounds the smallest resolvable encounter timescale to
+// ~sqrt(softening^3 / (GRAVITY*m)); fixed-dt Verlet stays symplectic (energy
+// conserved) only while that timescale >= dt. At softening=0.001 the timescale
+// was ~1e-7 << dt=0.005, so close passes injected spurious energy (measured
+// |growth| 11514x over T=0.3s @ n=44000); softening=1.0 lifts it to ~3e-3
+// (~0.6*dt) and energy stops diverging (|growth| ~0.9x). Threaded through the
+// physics call chain via SimulationConfig.softening; this constant is the
+// default for callers without a config handy (benches, examples).
+pub const DEFAULT_SOFTENING: f32 = 1.0;
 
 // Default Barnes-Hut opening-angle threshold. Kept as a named constant so
 // callers without a SimulationConfig handy (benches, examples) pick up the
@@ -27,13 +39,13 @@ pub struct EulerSimple;
 pub struct Verlet;
 
 pub trait PhysicsSystem {
-    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32, theta: f32) -> Rc<Vec<PhysicsObject>>;
+    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32, theta: f32, softening: f32) -> Rc<Vec<PhysicsObject>>;
 }
 
 impl PhysicsSystem for EulerSimple {
-    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32, theta: f32) -> Rc<Vec<PhysicsObject>> {
+    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32, theta: f32, softening: f32) -> Rc<Vec<PhysicsObject>> {
         let mut objects = (*objects).clone();
-        let accelerations = Physics::compute_accelerations(&objects, center, half_size, theta);
+        let accelerations = Physics::compute_accelerations(&objects, center, half_size, theta, softening);
         for (obj, accelleration) in objects.iter_mut().zip(accelerations.iter()) {
             obj.velocity += *accelleration * dt;
             obj.position += obj.velocity * dt;
@@ -44,8 +56,8 @@ impl PhysicsSystem for EulerSimple {
 }
 
 impl PhysicsSystem for Verlet {
-    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32, theta: f32) -> Rc<Vec<PhysicsObject>> {
-        let (objects, _) = Self::execute_cached(objects, dt, center, half_size, theta, None);
+    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32, theta: f32, softening: f32) -> Rc<Vec<PhysicsObject>> {
+        let (objects, _) = Self::execute_cached(objects, dt, center, half_size, theta, softening, None);
         objects
     }
 }
@@ -63,19 +75,20 @@ impl Verlet {
         center: Vec2,
         half_size: f32,
         theta: f32,
+        softening: f32,
         prev_acc_new: Option<&[Vec2]>,
     ) -> (Rc<Vec<PhysicsObject>>, Vec<Vec2>) {
         let mut objects = (*objects).clone();
         let acc_old = match prev_acc_new {
             Some(acc) => acc.to_vec(),
-            None => Physics::compute_accelerations(&objects, center, half_size, theta),
+            None => Physics::compute_accelerations(&objects, center, half_size, theta, softening),
         };
 
         for (obj, acc) in objects.iter_mut().zip(acc_old.iter()) {
             obj.position += obj.velocity * dt + 0.5 * *acc * dt * dt;
         }
 
-        let acc_new = Physics::compute_accelerations(&objects, center, half_size, theta);
+        let acc_new = Physics::compute_accelerations(&objects, center, half_size, theta, softening);
 
         for ((obj, a_old), a_new) in objects.iter_mut().zip(acc_old.iter()).zip(acc_new.iter()) {
             obj.velocity += 0.5 * (*a_old + *a_new) * dt;
@@ -86,7 +99,7 @@ impl Verlet {
 }
 
 impl Physics {
-    pub fn total_energy(objects: &[PhysicsObject]) -> f32 {
+    pub fn total_energy(objects: &[PhysicsObject], softening: f32) -> f32 {
         let kinetic: f32 = objects
             .iter()
             .map(|o| 0.5 * o.mass * o.velocity.length_squared())
@@ -95,7 +108,7 @@ impl Physics {
         let potential: f32 = (0..objects.len())
             .flat_map(|i| (i + 1..objects.len()).map(move |j| (i, j)))
             .map(|(i, j)| {
-                let dist_sq = Vec2::distance_squared(objects[i].position, objects[j].position) + SOFTENING * SOFTENING;
+                let dist_sq = Vec2::distance_squared(objects[i].position, objects[j].position) + softening * softening;
                 -GRAVITY * objects[i].mass * objects[j].mass / dist_sq.sqrt()
             })
             .sum();
@@ -115,17 +128,17 @@ impl Physics {
     // body j's walk treats {j,cluster-containing-i}), so walk_potential's
     // raw sum double-counts everything uniformly; total_energy_approx
     // halves it once at the end to correct for that.
-    pub fn total_energy_approx(objects: &[PhysicsObject], center: Vec2, half_size: f32, theta: f32) -> f32 {
+    pub fn total_energy_approx(objects: &[PhysicsObject], center: Vec2, half_size: f32, theta: f32, softening: f32) -> f32 {
         let kinetic: f32 = objects
             .iter()
             .map(|o| 0.5 * o.mass * o.velocity.length_squared())
             .sum();
 
         let tree = Quadtree::build(objects, center, half_size);
-        kinetic + Self::walk_potential(objects, &tree, theta)
+        kinetic + Self::walk_potential(objects, &tree, theta, softening)
     }
 
-    fn walk_potential(objects: &[PhysicsObject], tree: &Quadtree<'_>, theta: f32) -> f32 {
+    fn walk_potential(objects: &[PhysicsObject], tree: &Quadtree<'_>, theta: f32, softening: f32) -> f32 {
         let mut total = 0.0f32;
         for i in 0..objects.len() {
             let mut pair_sum = 0.0f32;
@@ -133,7 +146,7 @@ impl Physics {
                 if let Some(indices) = node.indices {
                     for &j in indices {
                         if j != i {
-                            let dist_sq = Vec2::distance_squared(objects[i].position, objects[j].position) + SOFTENING * SOFTENING;
+                            let dist_sq = Vec2::distance_squared(objects[i].position, objects[j].position) + softening * softening;
                             pair_sum += -GRAVITY * objects[i].mass * objects[j].mass / dist_sq.sqrt();
                         }
                     }
@@ -143,7 +156,7 @@ impl Physics {
                     if d == 0.0 || (node.half_size * 2.0) / d > theta {
                         WalkDecision::Descend
                     } else {
-                        let dist_sq = d * d + SOFTENING * SOFTENING;
+                        let dist_sq = d * d + softening * softening;
                         pair_sum += -GRAVITY * objects[i].mass * node.total_mass / dist_sq.sqrt();
                         WalkDecision::Skip
                     }
@@ -154,22 +167,22 @@ impl Physics {
         total * 0.5
     }
 
-    fn compute_acceleration(pos_a: Vec2, pos_b: Vec2, mass_b: f32) -> Vec2 {
+    fn compute_acceleration(pos_a: Vec2, pos_b: Vec2, mass_b: f32, softening: f32) -> Vec2 {
         let delta = pos_b - pos_a;
-        let dist_sq = Vec2::distance_squared(pos_a, pos_b) + SOFTENING * SOFTENING;
+        let dist_sq = Vec2::distance_squared(pos_a, pos_b) + softening * softening;
         let dist = dist_sq.sqrt();
         (GRAVITY * mass_b) / (dist_sq * dist) * delta
     }
 
-    pub fn compute_accelerations(objects: &[PhysicsObject], center: Vec2, half_size: f32, theta: f32) -> Vec<Vec2> {
+    pub fn compute_accelerations(objects: &[PhysicsObject], center: Vec2, half_size: f32, theta: f32, softening: f32) -> Vec<Vec2> {
         let tree = Quadtree::build(objects, center, half_size);
-        Self::walk_forces(objects, &tree, theta)
+        Self::walk_forces(objects, &tree, theta, softening)
     }
 
     // `objects` must be the exact slice (same length and order) that `tree` was
     // built from. A mismatched slice isn't memory-unsafe but silently produces
     // wrong accelerations (or panics on an out-of-bounds index).
-    pub fn walk_forces(objects: &[PhysicsObject], tree: &Quadtree<'_>, theta: f32) -> Vec<Vec2> {
+    pub fn walk_forces(objects: &[PhysicsObject], tree: &Quadtree<'_>, theta: f32, softening: f32) -> Vec<Vec2> {
         let mut res = Vec::new();
         for i in 0..objects.len() {
             let mut acc = Vec2::ZERO;
@@ -178,7 +191,7 @@ impl Physics {
                     // foglia: forza diretta, i è catturato dalla closure
                     for &j in indices {
                         if j != i {
-                            acc += Physics::compute_acceleration(objects[i].position, objects[j].position, objects[j].mass);
+                            acc += Physics::compute_acceleration(objects[i].position, objects[j].position, objects[j].mass, softening);
                         }
                     }
                     WalkDecision::Skip
@@ -187,7 +200,7 @@ impl Physics {
                     if d == 0.0 || (node.half_size * 2.0) / d > theta {
                         WalkDecision::Descend
                     } else {
-                        acc += Physics::compute_acceleration(objects[i].position, node.center_of_mass, node.total_mass);
+                        acc += Physics::compute_acceleration(objects[i].position, node.center_of_mass, node.total_mass, softening);
                         WalkDecision::Skip
                     }
                 }

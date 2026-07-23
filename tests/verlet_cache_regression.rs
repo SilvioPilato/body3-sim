@@ -11,10 +11,15 @@ use body3_sim::simulation::{RandomSwarmParams, Scenario, Simulation, SimulationC
 // any future CentralSwarm geometry tweak). Bounded regime (radii 60-280
 // around a ~20000-mass center) keeps pinned values in a sane magnitude range.
 //
-// theta=1.5 default applied (SimulationConfig.theta_threshold = 1.5). The
-// pinned EXPECTED array is unchanged from the theta=0.5 era: with only 7
-// bodies the quadtree has almost no internal nodes, so the opening-angle
+// theta=1.5 default applied (SimulationConfig.theta_threshold = 1.5). With
+// only 7 bodies the quadtree has almost no internal nodes, so the opening-angle
 // test rarely fires and theta is a no-op at this scale.
+//
+// EXPECTED re-pinned at SOFTENING=1.0 (was 0.001): the softened Plummer force
+// perturbs the trajectory. At these separations (radii 60-280) the shift is
+// tiny (~0.007 in position over 10 steps) but exceeds the 1e-4 tolerance, so
+// the baseline was regenerated. This guards the acc-caching identity, not the
+// SOFTENING value — re-pin if SOFTENING changes again.
 #[test]
 fn verlet_trajectory_matches_pinned_baseline() {
     let mut sim = Simulation::new(SimulationConfig {
@@ -29,6 +34,7 @@ fn verlet_trajectory_matches_pinned_baseline() {
         physics_dt: 0.005,
         time_scale: 1.0,
         theta_threshold: 1.5,
+        softening: 1.0,
     });
 
     for _ in 0..10 {
@@ -44,13 +50,13 @@ fn verlet_trajectory_matches_pinned_baseline() {
     }
 
     const EXPECTED: [(f32, f32, f32, f32); 7] = [
-        (400.002594, 399.999146, 0.152050, 0.004110),
-        (455.964569, 541.665100, -3362.504150, 1341.465698),
-        (493.724060, 325.748749, 2552.687744, 3173.327393),
-        (263.981537, 464.094452, -1563.722900, -3289.985596),
-        (630.781921, 321.162842, 926.553955, 2709.567627),
-        (133.621109, 316.314056, 801.782593, -2553.403564),
-        (365.986206, 545.089294, -3564.842285, -823.293457),
+        (400.002594, 399.999146, 0.151999, 0.004148),
+        (455.971680, 541.668884, -3362.242676, 1341.728516),
+        (493.723694, 325.725250, 2553.209229, 3172.285400),
+        (263.977997, 464.102325, -1563.984863, -3289.687744),
+        (630.782715, 321.162140, 926.591858, 2709.541748),
+        (133.620483, 316.314117, 801.756470, -2553.406006),
+        (365.990295, 545.096924, -3564.767822, -822.893921),
     ];
 
     for (i, (obj, exp)) in objects.iter().zip(EXPECTED.iter()).enumerate() {

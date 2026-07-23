@@ -10,6 +10,7 @@ fn main() {
         physics_dt: 0.005,
         time_scale: 1.0,
         theta_threshold: body3_sim::physics::DEFAULT_TETHA_THRESHOLD,
+        softening: body3_sim::physics::DEFAULT_SOFTENING,
     });
 
     let start = std::time::Instant::now();

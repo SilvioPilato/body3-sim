@@ -283,7 +283,7 @@ async fn main() {
         // update when the result arrives. On wasm32 the worker is a no-op stub,
         // so the energy display just stays at its initial value there.
         if frame_count % energy_log_interval(sim.objects().len()) == 0 {
-            energy_worker.request(sim.objects());
+            energy_worker.request(sim.objects(), sim.config().softening);
         }
         if let Some(energy) = energy_worker.try_recv() {
             total_energy = energy;

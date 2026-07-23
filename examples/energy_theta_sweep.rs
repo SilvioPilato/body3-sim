@@ -19,6 +19,7 @@ fn sim_for(n: usize, theta: f32) -> Simulation {
         physics_dt: 0.005,
         time_scale: 1.0,
         theta_threshold: theta,
+        softening: body3_sim::physics::DEFAULT_SOFTENING,
     })
 }
 
