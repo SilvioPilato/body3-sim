@@ -28,6 +28,13 @@ use body3_sim::simulation::{RandomSwarmParams, Scenario, Simulation, SimulationC
 // velocity. obj 6 is the closest orbiter (r~66 from the center), where the
 // tree root recentering to that body shifts the Barnes-Hut center of mass
 // enough to perturb the cached acceleration.
+//
+// Re-pinned again after Task 5 circularize: random_swarm now derives its
+// orbiter speeds from the measured force field (circularize) instead of the
+// analytic sqrt(G*M/r), so all six orbiters' spawn velocities shifted by
+// ~0.03-0.3% (the swarm's own softening and non-core mass slightly reduce
+// the radial pull). The pin depends on circularize's use of fitting_root
+// too, so changes to fitting_root's MARGIN will also move these values.
 #[test]
 fn verlet_trajectory_matches_pinned_baseline() {
     let mut sim = Simulation::new(SimulationConfig {
@@ -58,13 +65,13 @@ fn verlet_trajectory_matches_pinned_baseline() {
     }
 
     const EXPECTED: [(f32, f32, f32, f32); 7] = [
-        (400.002594, 399.999146, 0.151999, 0.004148),
-        (455.971680, 541.668884, -3362.242676, 1341.728516),
-        (493.723694, 325.725250, 2553.209229, 3172.285400),
-        (263.977997, 464.102325, -1563.984863, -3289.687744),
-        (630.782715, 321.162140, 926.591858, 2709.541748),
-        (133.620483, 316.314117, 801.756470, -2553.406006),
-        (365.990295, 545.096924, -3564.767578, -822.894043),
+        (400.002594, 399.999146, 0.152005, 0.004102),
+        (455.973450, 541.675232, -3362.134033, 1341.914673),
+        (493.719818, 325.734253, 2552.988770, 3172.674316),
+        (263.974182, 464.103790, -1564.098511, -3289.608643),
+        (630.795898, 321.171234, 926.870056, 2709.680176),
+        (133.617126, 316.297729, 801.666748, -2553.714355),
+        (365.987915, 545.105408, -3564.782959, -822.595093),
     ];
 
     for (i, (obj, exp)) in objects.iter().zip(EXPECTED.iter()).enumerate() {

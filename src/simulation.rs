@@ -254,14 +254,14 @@ impl SimulationConfig {
     }
 }
 
-fn central_swarm(n: usize, center: Vec2) -> Vec<PhysicsObject> {
-    central_swarm_at(n, center, Vec2::ZERO)
+fn central_swarm(n: usize, center: Vec2, theta: f32, softening: f32) -> Vec<PhysicsObject> {
+    central_swarm_at(n, center, Vec2::ZERO, theta, softening)
 }
 
 // A central_swarm whose every body (core + orbiters) is additionally moving at
 // `bulk` — the whole cluster translates rigidly, so the internal orbits are
 // unchanged. Used to launch two swarms at each other in GalaxyCollision.
-fn central_swarm_at(n: usize, center: Vec2, bulk: Vec2) -> Vec<PhysicsObject> {
+fn central_swarm_at(n: usize, center: Vec2, bulk: Vec2, theta: f32, softening: f32) -> Vec<PhysicsObject> {
     let central_mass = CENTRAL_SWARM_CORE_MASS;
     let light_mass = CENTRAL_SWARM_LIGHT_MASS;
     let (min_radius, max_radius) = central_swarm_radii(n);
@@ -269,7 +269,7 @@ fn central_swarm_at(n: usize, center: Vec2, bulk: Vec2) -> Vec<PhysicsObject> {
     let mut objects = Vec::with_capacity(n + 1);
     objects.push(PhysicsObject {
         position: center,
-        velocity: bulk,
+        velocity: Vec2::ZERO,
         mass: central_mass,
     });
 
@@ -280,11 +280,49 @@ fn central_swarm_at(n: usize, center: Vec2, bulk: Vec2) -> Vec<PhysicsObject> {
         let angle = golden_angle * i as f32;
         let dir = Vec2 { x: angle.cos(), y: angle.sin() };
         let position = center + dir * radius;
-        let speed = (GRAVITY * central_mass / radius).sqrt();
-        let tangent = Vec2 { x: -dir.y, y: dir.x } * speed;
-        objects.push(PhysicsObject { position, velocity: tangent + bulk, mass: light_mass });
+        objects.push(PhysicsObject { position, velocity: Vec2::ZERO, mass: light_mass });
+    }
+
+    // Circularize about this swarm's own center BEFORE the bulk boost, so a
+    // GalaxyCollision core is circularized against its own swarm only and the
+    // rigid translation leaves the internal orbits untouched.
+    circularize(&mut objects, center, theta, softening);
+    for obj in objects.iter_mut() {
+        obj.velocity += bulk;
     }
     objects
+}
+
+// Sets each orbiter's speed to the circular speed for the acceleration it
+// ACTUALLY feels, rather than the analytic sqrt(G*M_core/r), which ignores
+// both the swarm's own mass and the softening. Two reasons this is the
+// measured form rather than an enclosed-mass estimate:
+//
+//   - the shell theorem does not hold in 2D with a 1/r^2 force (arc length
+//     grows as r, force falls as 1/r^2, so the near arc wins and exterior
+//     matter pulls outward instead of cancelling), so an enclosed-mass sum
+//     would systematically overestimate the required speed
+//   - it needs no radius-ordered indices, so it works unchanged for
+//     random_swarm, whose radii are drawn at random
+//
+// `objects[0]` is the core and is skipped. Velocities are ignored by the force
+// evaluation, so this may be called before or after they are set.
+fn circularize(objects: &mut [PhysicsObject], center: Vec2, theta: f32, softening: f32) {
+    let (root_center, half_size) = crate::quadtree::fitting_root(objects);
+    let acc = Physics::compute_accelerations(objects, root_center, half_size, theta, softening);
+    for (obj, a) in objects.iter_mut().zip(acc.iter()).skip(1) {
+        let d = obj.position - center;
+        let r = d.length();
+        if r <= 0.0 {
+            continue;
+        }
+        let dir = d / r;
+        let a_radial = -a.dot(dir); // positive => net pull toward the center
+        if a_radial <= 0.0 {
+            continue; // net outward: no circular orbit exists here
+        }
+        obj.velocity = vec2(-dir.y, dir.x) * (a_radial * r).sqrt();
+    }
 }
 
 fn dual_circle(center: Vec2) -> Vec<PhysicsObject> {
@@ -480,17 +518,17 @@ fn slingshot(center: Vec2) -> Vec<PhysicsObject> {
     objects
 }
 
-fn galaxy_collision(total: usize, center: Vec2) -> Vec<PhysicsObject> {
+fn galaxy_collision(total: usize, center: Vec2, theta: f32, softening: f32) -> Vec<PhysicsObject> {
     let per = total / 2;
     let a_center = center + vec2(-GALAXY_SEPARATION / 2.0, GALAXY_IMPACT / 2.0);
     let b_center = center + vec2(GALAXY_SEPARATION / 2.0, -GALAXY_IMPACT / 2.0);
     // opposite bulk velocities -> the pair's net momentum cancels (equal cores).
-    let mut objects = central_swarm_at(per, a_center, vec2(GALAXY_APPROACH_SPEED, 0.0));
-    objects.extend(central_swarm_at(total - per, b_center, vec2(-GALAXY_APPROACH_SPEED, 0.0)));
+    let mut objects = central_swarm_at(per, a_center, vec2(GALAXY_APPROACH_SPEED, 0.0), theta, softening);
+    objects.extend(central_swarm_at(total - per, b_center, vec2(-GALAXY_APPROACH_SPEED, 0.0), theta, softening));
     objects
 }
 
-fn random_swarm(params: &RandomSwarmParams, center: Vec2) -> Vec<PhysicsObject> {
+fn random_swarm(params: &RandomSwarmParams, center: Vec2, theta: f32, softening: f32) -> Vec<PhysicsObject> {
     srand(params.seed);
     let central_mass = gen_range(params.central_mass_range.0, params.central_mass_range.1);
 
@@ -509,11 +547,10 @@ fn random_swarm(params: &RandomSwarmParams, center: Vec2) -> Vec<PhysicsObject> 
         let angle = golden_angle * i as f32;
         let dir = Vec2 { x: angle.cos(), y: angle.sin() };
         let position = center + dir * radius;
-        // derived circular-orbit speed from the randomized radius/central_mass, not a separate random draw.
-        let speed = (GRAVITY * central_mass / radius).sqrt();
-        let tangent = Vec2 { x: -dir.y, y: dir.x } * speed;
-        objects.push(PhysicsObject { position, velocity: tangent, mass: light_mass });
+        objects.push(PhysicsObject { position, velocity: Vec2::ZERO, mass: light_mass });
     }
+
+    circularize(&mut objects, center, theta, softening);
     objects
 }
 
@@ -534,9 +571,9 @@ fn random_n_body(params: &RandomNBodyParams, center: Vec2) -> Vec<PhysicsObject>
     objects
 }
 
-fn build_scenario(scenario: &Scenario, center: Vec2) -> Vec<PhysicsObject> {
+fn build_scenario(scenario: &Scenario, center: Vec2, theta: f32, softening: f32) -> Vec<PhysicsObject> {
     match scenario {
-        Scenario::CentralSwarm { swarm_size } => central_swarm(*swarm_size, center),
+        Scenario::CentralSwarm { swarm_size } => central_swarm(*swarm_size, center, theta, softening),
         Scenario::DualCircle => dual_circle(center),
         Scenario::TriangleCircle => triangle_circle(center),
         Scenario::Burrau1913 => burrau_1913(center),
@@ -545,8 +582,8 @@ fn build_scenario(scenario: &Scenario, center: Vec2) -> Vec<PhysicsObject> {
         Scenario::Circumbinary => circumbinary(center),
         Scenario::Trojan => trojan(center),
         Scenario::Slingshot => slingshot(center),
-        Scenario::GalaxyCollision { swarm_size } => galaxy_collision(*swarm_size, center),
-        Scenario::RandomSwarm(params) => random_swarm(params, center),
+        Scenario::GalaxyCollision { swarm_size } => galaxy_collision(*swarm_size, center, theta, softening),
+        Scenario::RandomSwarm(params) => random_swarm(params, center, theta, softening),
         Scenario::RandomNBody(params) => random_n_body(params, center),
     }
 }
@@ -570,7 +607,12 @@ impl Simulation {
     pub fn new(config: SimulationConfig) -> Self {
         let center = vec2(config.screen_size / 2.0, config.screen_size / 2.0);
         let world_half_size = Self::world_extent(&config.scenario, config.screen_size);
-        let objects = Rc::new(build_scenario(&config.scenario, center));
+        let objects = Rc::new(build_scenario(
+            &config.scenario,
+            center,
+            config.theta_threshold,
+            config.softening,
+        ));
         Self { config, center, world_half_size, objects, accumulator: 0.0, cached_acceleration: None }
     }
 

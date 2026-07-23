@@ -63,3 +63,36 @@ fn central_swarm_stays_near_its_spawn_extent() {
         spawn_max * 4.0
     );
 }
+
+#[test]
+fn swarm_orbiters_are_circular_in_the_actual_force_field() {
+    // v^2 / r must equal the radial acceleration the body really feels.
+    // Deriving the speed from the core mass alone ignores the swarm's own
+    // mass, which at large n exceeds the core.
+    let config = SimulationConfig::for_scenario(Scenario::CentralSwarm { swarm_size: 2000 });
+    let sim = Simulation::new(config);
+    let center = macroquad::math::vec2(config.screen_size / 2.0, config.screen_size / 2.0);
+    let acc = {
+        let (root_center, root_half) = body3_sim::quadtree::fitting_root(sim.objects());
+        Physics::compute_accelerations(
+            sim.objects(),
+            root_center,
+            root_half,
+            config.theta_threshold,
+            config.softening,
+        )
+    };
+
+    let mut worst = 0.0f32;
+    for (obj, a) in sim.objects().iter().zip(acc.iter()).skip(1) {
+        let d = obj.position - center;
+        let r = d.length();
+        let a_radial = -a.dot(d / r);
+        if a_radial <= 0.0 {
+            continue;
+        }
+        let expected = (a_radial * r).sqrt();
+        worst = worst.max((obj.velocity.length() - expected).abs() / expected);
+    }
+    assert!(worst < 0.02, "worst relative speed error {:.1}%", worst * 100.0);
+}
