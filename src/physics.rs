@@ -2,11 +2,16 @@ use std::rc::Rc;
 
 use macroquad::math::Vec2;
 
-use crate::quadtree::{NodeView, Quadtree, WalkDecision};
+use crate::quadtree::{Quadtree, WalkDecision};
 
 pub const GRAVITY: f32 = 100_000.0;
 const SOFTENING: f32 = 0.001;
-const TETHA_THRESHOLD: f32 = 0.5;
+
+// Default Barnes-Hut opening-angle threshold. Kept as a named constant so
+// callers without a SimulationConfig handy (benches, examples) pick up the
+// production default. Production threads `SimulationConfig.theta_threshold`
+// through the call chain instead of reading this constant directly.
+pub const DEFAULT_TETHA_THRESHOLD: f32 = 1.8;
 
 #[derive(Clone, Debug, Copy)]
 pub struct PhysicsObject {
@@ -22,13 +27,13 @@ pub struct EulerSimple;
 pub struct Verlet;
 
 pub trait PhysicsSystem {
-    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32) -> Rc<Vec<PhysicsObject>>;
+    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32, theta: f32) -> Rc<Vec<PhysicsObject>>;
 }
 
 impl PhysicsSystem for EulerSimple {
-    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32) -> Rc<Vec<PhysicsObject>> {
+    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32, theta: f32) -> Rc<Vec<PhysicsObject>> {
         let mut objects = (*objects).clone();
-        let accelerations = Physics::compute_accelerations(&objects, center, half_size);
+        let accelerations = Physics::compute_accelerations(&objects, center, half_size, theta);
         for (obj, accelleration) in objects.iter_mut().zip(accelerations.iter()) {
             obj.velocity += *accelleration * dt;
             obj.position += obj.velocity * dt;
@@ -39,8 +44,8 @@ impl PhysicsSystem for EulerSimple {
 }
 
 impl PhysicsSystem for Verlet {
-    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32) -> Rc<Vec<PhysicsObject>> {
-        let (objects, _) = Self::execute_cached(objects, dt, center, half_size, None);
+    fn execute(objects: Rc<Vec<PhysicsObject>>, dt: f32, center: Vec2, half_size: f32, theta: f32) -> Rc<Vec<PhysicsObject>> {
+        let (objects, _) = Self::execute_cached(objects, dt, center, half_size, theta, None);
         objects
     }
 }
@@ -57,19 +62,20 @@ impl Verlet {
         dt: f32,
         center: Vec2,
         half_size: f32,
+        theta: f32,
         prev_acc_new: Option<&[Vec2]>,
     ) -> (Rc<Vec<PhysicsObject>>, Vec<Vec2>) {
         let mut objects = (*objects).clone();
         let acc_old = match prev_acc_new {
             Some(acc) => acc.to_vec(),
-            None => Physics::compute_accelerations(&objects, center, half_size),
+            None => Physics::compute_accelerations(&objects, center, half_size, theta),
         };
 
         for (obj, acc) in objects.iter_mut().zip(acc_old.iter()) {
             obj.position += obj.velocity * dt + 0.5 * *acc * dt * dt;
         }
 
-        let acc_new = Physics::compute_accelerations(&objects, center, half_size);
+        let acc_new = Physics::compute_accelerations(&objects, center, half_size, theta);
 
         for ((obj, a_old), a_new) in objects.iter_mut().zip(acc_old.iter()).zip(acc_new.iter()) {
             obj.velocity += 0.5 * (*a_old + *a_new) * dt;
@@ -98,28 +104,28 @@ impl Physics {
     }
 
     // Same Barnes-Hut approximation already trusted for compute_accelerations
-    // (same tree, same TETHA_THRESHOLD opening-angle test), applied to
-    // potential energy instead of force. O(n log n) instead of exact
-    // total_energy's O(n^2), and — unlike Monte Carlo pair sampling —
-    // deterministic: no run-to-run variance, no risk of missing a dominant
-    // close encounter or flipping sign.
+    // (same tree, same `theta` opening-angle test), applied to potential
+    // energy instead of force. O(n log n) instead of exact total_energy's
+    // O(n^2), and — unlike Monte Carlo pair sampling — deterministic: no
+    // run-to-run variance, no risk of missing a dominant close encounter or
+    // flipping sign.
     //
     // Each unordered pair/cluster interaction is encountered from both
     // sides (body i's walk treats {i,cluster-containing-j} the same way
     // body j's walk treats {j,cluster-containing-i}), so walk_potential's
     // raw sum double-counts everything uniformly; total_energy_approx
     // halves it once at the end to correct for that.
-    pub fn total_energy_approx(objects: &[PhysicsObject], center: Vec2, half_size: f32) -> f32 {
+    pub fn total_energy_approx(objects: &[PhysicsObject], center: Vec2, half_size: f32, theta: f32) -> f32 {
         let kinetic: f32 = objects
             .iter()
             .map(|o| 0.5 * o.mass * o.velocity.length_squared())
             .sum();
 
         let tree = Quadtree::build(objects, center, half_size);
-        kinetic + Self::walk_potential(objects, &tree)
+        kinetic + Self::walk_potential(objects, &tree, theta)
     }
 
-    fn walk_potential(objects: &[PhysicsObject], tree: &Quadtree<'_>) -> f32 {
+    fn walk_potential(objects: &[PhysicsObject], tree: &Quadtree<'_>, theta: f32) -> f32 {
         let mut total = 0.0f32;
         for i in 0..objects.len() {
             let mut pair_sum = 0.0f32;
@@ -134,7 +140,7 @@ impl Physics {
                     WalkDecision::Skip
                 } else {
                     let d = Vec2::distance(objects[i].position, node.center_of_mass);
-                    if d == 0.0 || (node.half_size * 2.0) / d > TETHA_THRESHOLD {
+                    if d == 0.0 || (node.half_size * 2.0) / d > theta {
                         WalkDecision::Descend
                     } else {
                         let dist_sq = d * d + SOFTENING * SOFTENING;
@@ -155,15 +161,15 @@ impl Physics {
         (GRAVITY * mass_b) / (dist_sq * dist) * delta
     }
 
-    pub fn compute_accelerations(objects: &[PhysicsObject], center: Vec2, half_size: f32) -> Vec<Vec2> {
+    pub fn compute_accelerations(objects: &[PhysicsObject], center: Vec2, half_size: f32, theta: f32) -> Vec<Vec2> {
         let tree = Quadtree::build(objects, center, half_size);
-        Self::walk_forces(objects, &tree)
+        Self::walk_forces(objects, &tree, theta)
     }
 
     // `objects` must be the exact slice (same length and order) that `tree` was
     // built from. A mismatched slice isn't memory-unsafe but silently produces
     // wrong accelerations (or panics on an out-of-bounds index).
-    pub fn walk_forces(objects: &[PhysicsObject], tree: &Quadtree<'_>) -> Vec<Vec2> {
+    pub fn walk_forces(objects: &[PhysicsObject], tree: &Quadtree<'_>, theta: f32) -> Vec<Vec2> {
         let mut res = Vec::new();
         for i in 0..objects.len() {
             let mut acc = Vec2::ZERO;
@@ -178,7 +184,7 @@ impl Physics {
                     WalkDecision::Skip
                 } else {
                     let d = Vec2::distance(objects[i].position, node.center_of_mass);
-                    if d == 0.0 || (node.half_size * 2.0) / d > TETHA_THRESHOLD {
+                    if d == 0.0 || (node.half_size * 2.0) / d > theta {
                         WalkDecision::Descend
                     } else {
                         acc += Physics::compute_acceleration(objects[i].position, node.center_of_mass, node.total_mass);

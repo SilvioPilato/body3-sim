@@ -6,6 +6,7 @@ fn make_sim(n: usize) -> Simulation {
         screen_size: 800.0,
         physics_dt: 0.005,
         time_scale: 1.0,
+        theta_threshold: 1.5,
     })
 }
 

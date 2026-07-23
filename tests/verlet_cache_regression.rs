@@ -10,6 +10,11 @@ use body3_sim::simulation::{RandomSwarmParams, Scenario, Simulation, SimulationC
 // so this cache-equivalence guard stays independent of the density fix (and
 // any future CentralSwarm geometry tweak). Bounded regime (radii 60-280
 // around a ~20000-mass center) keeps pinned values in a sane magnitude range.
+//
+// theta=1.5 default applied (SimulationConfig.theta_threshold = 1.5). The
+// pinned EXPECTED array is unchanged from the theta=0.5 era: with only 7
+// bodies the quadtree has almost no internal nodes, so the opening-angle
+// test rarely fires and theta is a no-op at this scale.
 #[test]
 fn verlet_trajectory_matches_pinned_baseline() {
     let mut sim = Simulation::new(SimulationConfig {
@@ -23,6 +28,7 @@ fn verlet_trajectory_matches_pinned_baseline() {
         screen_size: 800.0,
         physics_dt: 0.005,
         time_scale: 1.0,
+        theta_threshold: 1.5,
     });
 
     for _ in 0..10 {

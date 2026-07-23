@@ -15,6 +15,7 @@ fn approx_energy_matches_exact_at_normal_density() {
             screen_size: 800.0,
             physics_dt: 0.005,
             time_scale: 1.0,
+            theta_threshold: 1.5,
         });
 
         let exact = sim.total_energy();

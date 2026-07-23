@@ -9,6 +9,7 @@ fn main() {
         screen_size: 800.0,
         physics_dt: 0.005,
         time_scale: 1.0,
+        theta_threshold: body3_sim::physics::DEFAULT_TETHA_THRESHOLD,
     });
 
     let start = std::time::Instant::now();

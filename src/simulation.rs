@@ -90,6 +90,14 @@ pub struct SimulationConfig {
     pub screen_size: f32,
     pub physics_dt: f32,
     pub time_scale: f32,
+    // Barnes-Hut opening-angle threshold. Larger values coarsen the force
+    // approximation (aggregate more aggressively) for better O(n log n)
+    // scaling; smaller values stay closer to exact O(n^2) pairwise forces.
+    // Default 1.8 (DEFAULT_TETHA_THRESHOLD) restores O(n log n) walk_forces scaling
+    // (measured 103.6x n=1000->64000 vs 102.5x prediction) while staying more
+    // accurate than theta=2.0; overridable
+    // from benches/tests/explicit configs but not exposed as a UI slider.
+    pub theta_threshold: f32,
 }
 
 impl Default for SimulationConfig {
@@ -99,6 +107,7 @@ impl Default for SimulationConfig {
             screen_size: 800.0,
             physics_dt: 0.005,
             time_scale: 0.3,
+            theta_threshold: crate::physics::DEFAULT_TETHA_THRESHOLD,
         }
     }
 }
@@ -279,6 +288,7 @@ impl Simulation {
                 self.config.physics_dt,
                 self.center,
                 self.world_half_size,
+                self.config.theta_threshold,
                 self.cached_acceleration.as_deref(),
             );
             self.objects = objects;
@@ -296,7 +306,7 @@ impl Simulation {
     }
 
     pub fn total_energy_approx(&self) -> f32 {
-        Physics::total_energy_approx(&self.objects, self.center, self.world_half_size)
+        Physics::total_energy_approx(&self.objects, self.center, self.world_half_size, self.config.theta_threshold)
     }
 
     pub fn config(&self) -> &SimulationConfig {
