@@ -73,12 +73,15 @@ impl PhysicsSystem for Verlet {
 }
 
 impl Verlet {
-    // Same integration as `execute`, but accepts the previous step's acc_new
+// Same integration as `execute`, but accepts the previous step's acc_new
     // as this step's acc_old instead of recomputing it. Force only depends on
     // position, and acc_new(t) is evaluated at the exact position acc_old(t+1)
-    // would be evaluated at (nothing moves between one step's end and the
-    // next step's start) — so reusing it is exact, not an approximation.
-    // Pass `None` on the first call (no prior acc_new exists yet).
+    // would be evaluated at (nothing moves between one step's end and the next
+    // step's start) — so the positions are exact. The tree, however, is refit
+    // each substep (Simulation::update), so the reused value came from a
+    // slightly different root than the one this step would have built: it
+    // stays a valid Barnes-Hut evaluation at the right positions, not a
+    // bit-identical one. Pass `None` on the first call.
     pub fn execute_cached(
         objects: Rc<Vec<PhysicsObject>>,
         dt: f32,

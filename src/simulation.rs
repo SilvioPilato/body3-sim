@@ -4,7 +4,7 @@ use std::rc::Rc;
 use macroquad::math::{Vec2, vec2};
 use macroquad::rand::{gen_range, srand};
 
-use crate::physics::{GRAVITY, Physics, PhysicsObject, Verlet};
+use crate::physics::{GRAVITY, Physics, PhysicsObject};
 
 // Caps how much simulated time a single update() call can inject. Without this,
 // an abnormally large frame_time (startup GPU/shader init, alt-tab, a debugger
@@ -21,6 +21,10 @@ const MAX_FRAME_TIME: f32 = 0.1;
 const CENTRAL_SWARM_REF_N: f32 = 1000.0;
 const CENTRAL_SWARM_MIN_RADIUS: f32 = 60.0;
 const CENTRAL_SWARM_MAX_RADIUS: f32 = 280.0;
+// Core and orbiter masses for CentralSwarm / GalaxyCollision. Named because
+// integration_params needs the core mass to derive the softening.
+pub const CENTRAL_SWARM_CORE_MASS: f32 = 20_000.0;
+pub const CENTRAL_SWARM_LIGHT_MASS: f32 = 1.0;
 // Quadtree::insert has no bounds check — bodies outside the root quadrant are
 // silently misfiled into corner quadrants, unbalancing the tree. The root
 // half-size must contain the whole swarm, with margin for orbital drift.
@@ -30,6 +34,66 @@ const WORLD_EXTENT_MARGIN: f32 = 1.1;
 pub fn central_swarm_radii(n: usize) -> (f32, f32) {
     let scale = (n as f32 / CENTRAL_SWARM_REF_N).sqrt();
     (CENTRAL_SWARM_MIN_RADIUS * scale, CENTRAL_SWARM_MAX_RADIUS * scale)
+}
+
+// The symplectic criterion (physics::min_softening) ties dt and softening
+// together, leaving exactly one free choice. Pick dt by COST: the force
+// evaluation is trivial at a handful of bodies, so few-body presets can afford
+// a tiny timestep and therefore a small, geometry-preserving softening; swarms
+// cannot, so they take a large dt and pay for it with a large softening. That
+// large softening is only self-consistent because swarm orbits are built from
+// the measured force field (see `circularize`), not from an analytic Kepler
+// speed that ignores it.
+const FEW_BODY_MAX: usize = 100;
+const FEW_BODY_DT: f32 = 1.0e-4;
+const SWARM_DT: f32 = 0.005;
+// Margin above the criterion's equality point. The sweep in
+// examples/stability_sweep.rs is clean from ~32 upward at dt=0.005 where the
+// criterion predicts 36.8, so a modest margin is enough.
+const SOFTENING_SAFETY: f32 = 1.2;
+
+/// Number of bodies `build_scenario` will produce. Drives the timestep choice.
+pub fn body_count(scenario: &Scenario) -> usize {
+    match scenario {
+        Scenario::CentralSwarm { swarm_size } => swarm_size + 1,
+        Scenario::DualCircle => 2,
+        Scenario::TriangleCircle => 3,
+        Scenario::Burrau1913 => 3,
+        Scenario::SolarSystem => SOLAR_PLANETS.len() + 1,
+        Scenario::FigureEight => 3,
+        Scenario::Circumbinary => CIRCUMBINARY_PLANETS.len() + 2,
+        Scenario::Trojan => 2 * TROJAN_COUNT_PER_POINT + 2,
+        Scenario::Slingshot => SLINGSHOT_IMPACT_PARAMS.len() + 1,
+        // galaxy_collision splits `swarm_size` in two and adds a core to each.
+        Scenario::GalaxyCollision { swarm_size } => swarm_size + 2,
+        Scenario::RandomSwarm(p) => p.swarm_size + 1,
+        Scenario::RandomNBody(p) => p.count,
+    }
+}
+
+/// Mass of the heaviest body in the scenario — the one that sets the shortest
+/// encounter timescale, and therefore the softening floor.
+pub fn dominant_mass(scenario: &Scenario) -> f32 {
+    match scenario {
+        Scenario::CentralSwarm { .. } | Scenario::GalaxyCollision { .. } => CENTRAL_SWARM_CORE_MASS,
+        Scenario::DualCircle => 50.0,
+        Scenario::TriangleCircle => 20.0,
+        Scenario::Burrau1913 => 5.0,
+        Scenario::SolarSystem => SOLAR_SUN_MASS,
+        Scenario::FigureEight => FIG8_MASS,
+        Scenario::Circumbinary => CIRCUMBINARY_STAR_A_MASS.max(CIRCUMBINARY_STAR_B_MASS),
+        Scenario::Trojan => TROJAN_SUN_MASS,
+        Scenario::Slingshot => SLINGSHOT_PLANET_MASS,
+        Scenario::RandomSwarm(p) => p.central_mass_range.1,
+        Scenario::RandomNBody(p) => p.mass_range.1,
+    }
+}
+
+/// `(physics_dt, softening)` for a scenario, satisfying the stability
+/// criterion by construction.
+pub fn integration_params(scenario: &Scenario) -> (f32, f32) {
+    let dt = if body_count(scenario) <= FEW_BODY_MAX { FEW_BODY_DT } else { SWARM_DT };
+    (dt, crate::physics::min_softening(dt, dominant_mass(scenario)) * SOFTENING_SAFETY)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -168,13 +232,24 @@ pub struct SimulationConfig {
 
 impl Default for SimulationConfig {
     fn default() -> Self {
+        Self::for_scenario(Scenario::CentralSwarm { swarm_size: 1000 })
+    }
+}
+
+impl SimulationConfig {
+    /// Config for a scenario with dt/softening derived from the stability
+    /// criterion. Use this rather than mutating `scenario` on an existing
+    /// config, which would leave the previous scenario's physics parameters in
+    /// place.
+    pub fn for_scenario(scenario: Scenario) -> Self {
+        let (physics_dt, softening) = integration_params(&scenario);
         Self {
-            scenario: Scenario::CentralSwarm { swarm_size: 1000 },
+            scenario,
             screen_size: 1000.0,
-            physics_dt: 0.005,
+            physics_dt,
             time_scale: 0.3,
             theta_threshold: crate::physics::DEFAULT_TETHA_THRESHOLD,
-            softening: crate::physics::DEFAULT_SOFTENING,
+            softening,
         }
     }
 }
@@ -187,8 +262,8 @@ fn central_swarm(n: usize, center: Vec2) -> Vec<PhysicsObject> {
 // `bulk` — the whole cluster translates rigidly, so the internal orbits are
 // unchanged. Used to launch two swarms at each other in GalaxyCollision.
 fn central_swarm_at(n: usize, center: Vec2, bulk: Vec2) -> Vec<PhysicsObject> {
-    let central_mass = 20_000.0_f32;
-    let light_mass = 1.0_f32;
+    let central_mass = CENTRAL_SWARM_CORE_MASS;
+    let light_mass = CENTRAL_SWARM_LIGHT_MASS;
     let (min_radius, max_radius) = central_swarm_radii(n);
 
     let mut objects = Vec::with_capacity(n + 1);
@@ -483,7 +558,11 @@ pub struct Simulation {
     objects: Rc<Vec<PhysicsObject>>,
     accumulator: f32,
     // acc_new from the last substep, reused as next substep's acc_old
-    // (Verlet::execute_cached) instead of recomputing it from scratch.
+    // instead of recomputing it from scratch. Valid because positions don't
+    // move between one step's end and the next step's start, so the cached
+    // acc is at the exact positions the next step's pre-update would have
+    // evaluated it at — and `fitting_root` is deterministic in the
+    // positions, so it would have built the same tree. See `update`.
     cached_acceleration: Option<Vec<Vec2>>,
 }
 
@@ -501,19 +580,42 @@ impl Simulation {
 
     pub fn update(&mut self, frame_time: f32) {
         self.accumulator += frame_time.min(MAX_FRAME_TIME) * self.config.time_scale;
-        while self.accumulator >= self.config.physics_dt {
-            let (objects, acc_new) = Verlet::execute_cached(
-                self.objects.clone(),
-                self.config.physics_dt,
-                self.center,
-                self.world_half_size,
-                self.config.theta_threshold,
-                self.config.softening,
-                self.cached_acceleration.as_deref(),
-            );
-            self.objects = objects;
+        let dt = self.config.physics_dt;
+        let theta = self.config.theta_threshold;
+        let softening = self.config.softening;
+        while self.accumulator >= dt {
+            // Inlined Verlet step (rather than Verlet::execute_cached) so the
+            // quadtree root can be refit on the POST-update positions used for
+            // acc_new, not just the pre-update positions used for acc_old.
+            // Bodies move by up to |v|*dt + 0.5*|a|*dt^2 per substep, so a root
+            // fit on pre-update can fail to contain them at the acc_new call
+            // — and Quadtree::insert has no bounds check, so the body would
+            // be silently misfiled. Fitting the root twice per substep is two
+            // O(n) passes against an O(n log n) tree build, negligible.
+            let mut objects = (*self.objects).clone();
+
+            let acc_old = match self.cached_acceleration.as_deref() {
+                Some(acc) => acc.to_vec(),
+                None => {
+                    let (rc, rh) = crate::quadtree::fitting_root(&objects);
+                    Physics::compute_accelerations(&objects, rc, rh, theta, softening)
+                }
+            };
+
+            for (obj, acc) in objects.iter_mut().zip(acc_old.iter()) {
+                obj.position += obj.velocity * dt + 0.5 * *acc * dt * dt;
+            }
+
+            let (rc_post, rh_post) = crate::quadtree::fitting_root(&objects);
+            let acc_new = Physics::compute_accelerations(&objects, rc_post, rh_post, theta, softening);
+
+            for ((obj, a_old), a_new) in objects.iter_mut().zip(acc_old.iter()).zip(acc_new.iter()) {
+                obj.velocity += 0.5 * (*a_old + *a_new) * dt;
+            }
+
+            self.objects = Rc::new(objects);
             self.cached_acceleration = Some(acc_new);
-            self.accumulator -= self.config.physics_dt;
+            self.accumulator -= dt;
         }
     }
 

@@ -20,6 +20,14 @@ use body3_sim::simulation::{RandomSwarmParams, Scenario, Simulation, SimulationC
 // tiny (~0.007 in position over 10 steps) but exceeds the 1e-4 tolerance, so
 // the baseline was regenerated. This guards the acc-caching identity, not the
 // SOFTENING value — re-pin if SOFTENING changes again.
+//
+// Re-pinned again after Task 6 root-refit: Simulation::update now calls
+// fitting_root per substep (once on pre-update positions for acc_old, once
+// on post-update for acc_new), so the tree differs slightly from the static
+// world_half_size root the cache previously used — a ~2e-4 shift on obj 6's
+// velocity. obj 6 is the closest orbiter (r~66 from the center), where the
+// tree root recentering to that body shifts the Barnes-Hut center of mass
+// enough to perturb the cached acceleration.
 #[test]
 fn verlet_trajectory_matches_pinned_baseline() {
     let mut sim = Simulation::new(SimulationConfig {
@@ -56,7 +64,7 @@ fn verlet_trajectory_matches_pinned_baseline() {
         (263.977997, 464.102325, -1563.984863, -3289.687744),
         (630.782715, 321.162140, 926.591858, 2709.541748),
         (133.620483, 316.314117, 801.756470, -2553.406006),
-        (365.990295, 545.096924, -3564.767822, -822.893921),
+        (365.990295, 545.096924, -3564.767578, -822.894043),
     ];
 
     for (i, (obj, exp)) in objects.iter().zip(EXPECTED.iter()).enumerate() {
