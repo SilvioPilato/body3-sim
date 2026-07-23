@@ -8,11 +8,12 @@ use crate::physics::{Physics, PhysicsObject};
 // `try_recv()` every frame; the computation itself happens on a background
 // thread (native) so the ~1s O(n^2) cost at large n never stalls rendering.
 //
-// WASM note: std::thread does not work on wasm32 without wasm-bindgen-rayon +
-// SharedArrayBuffer + COOP/COEP headers. The wasm backend below is therefore a
-// documented no-op stub (try_recv always None, request ignored). A future wasm
-// implementation should plug a web-worker / rayon backend into this same
-// struct API so main.rs stays unchanged.
+// WASM note: the wasm backend below is a documented no-op stub
+// (try_recv always None, request ignored) because std::thread is unavailable
+// without SharedArrayBuffer. The deployed site (docs/web-deploy.md) serves
+// COOP/COEP headers, so a future wasm backend can wire
+// wasm-bindgen-rayon into this same struct API — main.rs would not change,
+// only the `#[cfg(target_arch = "wasm32")]` request/try_recv bodies.
 pub struct EnergyWorker {
     #[cfg(not(target_arch = "wasm32"))]
     rx: Option<mpsc::Receiver<f32>>,
