@@ -4,3 +4,6 @@
 /profile.json.gz
 /energy_bench_*.csv
 /softening_sweep_*.csv
+
+/dist
+/*.wasm

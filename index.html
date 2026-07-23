@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>body3-sim</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: #000;
+        overflow: hidden;
+      }
+      canvas {
+        width: 100vw;
+        height: 100vh;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <link data-trunk rel="rust" data-bin="body3-sim" data-type="main" />
+    <!-- Copies static files (the _headers below) to dist/ verbatim. -->
+    <link data-trunk rel="copy-file" path="_headers" />
+  </body>
+</html>
