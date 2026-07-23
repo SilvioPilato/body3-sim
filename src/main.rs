@@ -44,7 +44,10 @@ const RANDOM_NBODY_POSITION_SPREAD_RANGE: std::ops::RangeInclusive<f32> = 10.0..
 const RANDOM_NBODY_VELOCITY_MAX: f32 = 200.0;
 
 const TIME_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.0..=5.0;
-const PHYSICS_DT_RANGE: std::ops::RangeInclusive<f32> = 0.0005..=0.02;
+// Lowered from 0.0005 to 0.0001 so the few-body presets' derived dt
+// (FEW_BODY_DT = 1e-4, see simulation::integration_params) lands inside the
+// slider and does not get silently clamped to 5e-4 on the first render.
+const PHYSICS_DT_RANGE: std::ops::RangeInclusive<f32> = 0.0001..=0.02;
 
 // `--benchmark`: forces this swarm_size (matches examples/profile_workload.rs's
 // documented "20-30 FPS" cliff point, so the two numbers are comparable) and
@@ -198,6 +201,10 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
             ui.heading("Simulation");
             ui.separator();
 
+            // Set by anything that feeds integration_params. Only then is the
+            // derived (dt, softening) pair recomputed — doing it every frame
+            // would overwrite the physics_dt override slider below.
+            let mut scenario_changed = false;
             let current_kind = ScenarioKind::from_scenario(&pending.scenario);
             egui::ComboBox::from_label("Scenario")
                 .selected_text(current_kind.label())
@@ -205,6 +212,7 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
                     for kind in ScenarioKind::ALL {
                         if ui.selectable_label(kind == current_kind, kind.label()).clicked() && kind != current_kind {
                             pending.scenario = kind.default_scenario();
+                            scenario_changed = true;
                         }
                     }
                 });
@@ -213,10 +221,14 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
 
             match &mut pending.scenario {
                 Scenario::CentralSwarm { swarm_size } => {
-                    ui.add(egui::Slider::new(swarm_size, CENTRAL_SWARM_SIZE_RANGE).text("swarm_size"));
+                    scenario_changed |= ui
+                        .add(egui::Slider::new(swarm_size, CENTRAL_SWARM_SIZE_RANGE).text("swarm_size"))
+                        .changed();
                 }
                 Scenario::GalaxyCollision { swarm_size } => {
-                    ui.add(egui::Slider::new(swarm_size, CENTRAL_SWARM_SIZE_RANGE).text("swarm_size (total)"));
+                    scenario_changed |= ui
+                        .add(egui::Slider::new(swarm_size, CENTRAL_SWARM_SIZE_RANGE).text("swarm_size (total)"))
+                        .changed();
                 }
                 Scenario::DualCircle
                 | Scenario::TriangleCircle
@@ -233,7 +245,9 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
                     ui.add(egui::Slider::new(&mut params.radius_range.0, 1.0..=params.radius_range.1).text("radius min"));
                     ui.add(egui::Slider::new(&mut params.radius_range.1, params.radius_range.0..=RANDOM_SWARM_RADIUS_MAX).text("radius max"));
                     ui.add(egui::Slider::new(&mut params.central_mass_range.0, RANDOM_SWARM_CENTRAL_MASS_MIN..=params.central_mass_range.1).text("central mass min"));
-                    ui.add(egui::Slider::new(&mut params.central_mass_range.1, params.central_mass_range.0..=RANDOM_SWARM_CENTRAL_MASS_MAX).text("central mass max"));
+                    scenario_changed |= ui
+                        .add(egui::Slider::new(&mut params.central_mass_range.1, params.central_mass_range.0..=RANDOM_SWARM_CENTRAL_MASS_MAX).text("central mass max"))
+                        .changed();
                     ui.add(egui::Slider::new(&mut params.light_mass_range.0, RANDOM_SWARM_LIGHT_MASS_MIN..=params.light_mass_range.1).text("light mass min"));
                     ui.add(egui::Slider::new(&mut params.light_mass_range.1, params.light_mass_range.0..=RANDOM_SWARM_LIGHT_MASS_MAX).text("light mass max"));
                     ui.horizontal(|ui| {
@@ -244,9 +258,13 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
                     });
                 }
                 Scenario::RandomNBody(params) => {
-                    ui.add(egui::Slider::new(&mut params.count, RANDOM_NBODY_COUNT_RANGE).text("count"));
+                    scenario_changed |= ui
+                        .add(egui::Slider::new(&mut params.count, RANDOM_NBODY_COUNT_RANGE).text("count"))
+                        .changed();
                     ui.add(egui::Slider::new(&mut params.mass_range.0, RANDOM_NBODY_MASS_MIN..=params.mass_range.1).text("mass min"));
-                    ui.add(egui::Slider::new(&mut params.mass_range.1, params.mass_range.0..=RANDOM_NBODY_MASS_MAX).text("mass max"));
+                    scenario_changed |= ui
+                        .add(egui::Slider::new(&mut params.mass_range.1, params.mass_range.0..=RANDOM_NBODY_MASS_MAX).text("mass max"))
+                        .changed();
                     ui.add(egui::Slider::new(&mut params.position_spread, RANDOM_NBODY_POSITION_SPREAD_RANGE).text("position spread"));
                     ui.add(egui::Slider::new(&mut params.velocity_range.0, 0.0..=params.velocity_range.1).text("velocity min"));
                     ui.add(egui::Slider::new(&mut params.velocity_range.1, params.velocity_range.0..=RANDOM_NBODY_VELOCITY_MAX).text("velocity max"));
@@ -259,12 +277,21 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
                 }
             }
 
+            if scenario_changed {
+                let (dt, softening) = body3_sim::simulation::integration_params(&pending.scenario);
+                pending.physics_dt = dt;
+                pending.softening = softening;
+            }
+
+            ui.separator();
+            ui.label(format!("softening: {:.2}  (derived)", pending.softening));
+
             ui.separator();
 
             if ui.add(egui::Slider::new(&mut pending.time_scale, TIME_SCALE_RANGE).text("time_scale")).changed() {
                 sim.set_time_scale(pending.time_scale);
             }
-            if ui.add(egui::Slider::new(&mut pending.physics_dt, PHYSICS_DT_RANGE).text("physics_dt")).changed() {
+            if ui.add(egui::Slider::new(&mut pending.physics_dt, PHYSICS_DT_RANGE).text("physics_dt (override)")).changed() {
                 sim.set_physics_dt(pending.physics_dt);
             }
 
