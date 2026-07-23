@@ -187,7 +187,10 @@ fn hsv_to_color(h: f32, s: f32, v: f32) -> Color {
     Color::new(r + m, g + m, b + m, 1.0)
 }
 
-fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Simulation) {
+// Returns true if the scenario was reset this frame, so the caller can snap
+// the camera to the new configuration instead of sliding to it.
+fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Simulation) -> bool {
+    let mut applied = false;
     egui::SidePanel::right("config_panel")
         .resizable(false)
         .exact_width(SIDEBAR_WIDTH)
@@ -269,8 +272,10 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
 
             if ui.button("Applica").clicked() {
                 sim.reset(*pending);
+                applied = true;
             }
         });
+    applied
 }
 
 #[macroquad::main(window_conf)]
@@ -303,6 +308,11 @@ async fn main() {
     let mut bench_samples: Vec<f64> = Vec::with_capacity(BENCH_FRAME_COUNT);
     let mut bench_frames_seen: usize = 0;
     let mut energy_worker = body3_sim::energy::EnergyWorker::new();
+    let mut camera_fit = body3_sim::camera::CameraFit::new(
+        vec2(config.screen_size / 2.0, config.screen_size / 2.0),
+        sim.world_half_size(),
+    );
+    camera_fit.snap(sim.objects());
 
     loop {
         let frame_start = std::time::Instant::now();
@@ -310,9 +320,19 @@ async fn main() {
         clear_background(BLACK);
         sim.update(get_frame_time());
 
+        let mut applied = false;
         egui_macroquad::ui(|ctx| {
-            draw_panel(ctx, &mut pending, &mut sim);
+            applied = draw_panel(ctx, &mut pending, &mut sim);
         });
+        if applied {
+            // world_half_size (the zoom-in floor) is scenario-dependent, so the
+            // fit is rebuilt rather than just re-snapped.
+            camera_fit = body3_sim::camera::CameraFit::new(
+                vec2(sim.config().screen_size / 2.0, sim.config().screen_size / 2.0),
+                sim.world_half_size(),
+            );
+            camera_fit.snap(sim.objects());
+        }
 
         if colors.len() != sim.objects().len() {
             colors = (0..sim.objects().len()).map(|_| random_body_color()).collect();
@@ -331,14 +351,18 @@ async fn main() {
         }
         frame_count += 1;
 
-        // Zoom-to-fit: the physics domain grows with sqrt(swarm_size)
-        // (constant spawn density), so map the whole world square onto the
-        // fixed 800x800 sim area left of the egui sidebar. At the default
-        // n=1000, world == screen and this camera is the identity mapping.
+        // Zoom-to-fit, re-evaluated every frame: the static
+        // Simulation::world_half_size only covers the SPAWN extent, but the
+        // system expands past it at runtime (ejected bodies, core-collapse
+        // rebound), which is what used to push bodies off-screen. CameraFit
+        // tracks the center of mass and the 98th-percentile radius instead,
+        // floored at world_half_size so no preset ever zooms in past its
+        // original framing — the camera only reacts by zooming out.
         let screen_size = sim.config().screen_size;
-        let world_size = sim.world_half_size() * 2.0;
+        camera_fit.update(sim.objects(), get_frame_time());
+        let world_size = camera_fit.half_size() * 2.0;
         set_camera(&Camera2D {
-            target: vec2(screen_size / 2.0, screen_size / 2.0),
+            target: camera_fit.center(),
             zoom: vec2(2.0 / world_size, -2.0 / world_size),
             viewport: Some((0, 0, screen_size as i32, screen_size as i32)),
             ..Default::default()
