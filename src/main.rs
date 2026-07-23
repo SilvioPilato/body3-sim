@@ -299,6 +299,8 @@ fn draw_panel(ctx: &egui::Context, pending: &mut SimulationConfig, sim: &mut Sim
 
             if ui.button("Applica").clicked() {
                 sim.reset(*pending);
+                #[cfg(target_arch = "wasm32")]
+                body3_sim::url::write_url_query(&body3_sim::url::encode(pending));
                 applied = true;
             }
         });
@@ -325,6 +327,14 @@ async fn main() {
     let mut config = SimulationConfig::default();
     if benchmark_mode {
         config.scenario = Scenario::CentralSwarm { swarm_size: bench_swarm_size };
+    } else {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let query = body3_sim::url::read_url_query();
+            if let Some(decoded) = body3_sim::url::decode(&query) {
+                config = decoded;
+            }
+        }
     }
 
     let mut sim = Simulation::new(config);

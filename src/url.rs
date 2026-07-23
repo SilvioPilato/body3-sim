@@ -230,3 +230,26 @@ pub fn decode(query: &str) -> Option<SimulationConfig> {
     match overrides.softening { Some(v) => canonical.softening = v, None => {} }
     Some(canonical)
 }
+
+// ---- wasm <-> window bridge ----
+// These functions touch the browser API and exist only under wasm32. The
+// native build of main.rs never calls them (gated at the call site too), so
+// they add no dead-code warnings when target_arch != "wasm32".
+
+#[cfg(target_arch = "wasm32")]
+pub fn read_url_query() -> String {
+    let window = web_sys::window().expect("no global window object");
+    let location = window.location();
+    let search = location.search().unwrap_or_default();
+    // strip leading '?'
+    if let Some(stripped) = search.strip_prefix('?') { stripped.to_string() } else { search }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn write_url_query(query: &str) {
+    let window = web_sys::window().expect("no global window object");
+    let path = window.location().pathname().unwrap_or_default();
+    let new_url = if query.is_empty() { path } else { format!("{}?{}", path, query) };
+    let history = window.history().expect("no history object");
+    let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", &new_url);
+}
