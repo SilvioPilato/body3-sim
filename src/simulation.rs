@@ -96,7 +96,7 @@ pub fn integration_params(scenario: &Scenario) -> (f32, f32) {
     (dt, crate::physics::min_softening(dt, dominant_mass(scenario)) * SOFTENING_SAFETY)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Scenario {
     CentralSwarm { swarm_size: usize },
     DualCircle,
@@ -166,7 +166,7 @@ const SLINGSHOT_PROBE_SPEED: f32 = 4_000.0;
 const SLINGSHOT_START_X: f32 = -450.0; // probe start x, relative to center
 const SLINGSHOT_IMPACT_PARAMS: [f32; 3] = [60.0, 120.0, 240.0];
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RandomSwarmParams {
     pub seed: u64,
     pub swarm_size: usize,
@@ -187,7 +187,7 @@ impl Default for RandomSwarmParams {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RandomNBodyParams {
     pub seed: u64,
     pub count: usize,
@@ -208,7 +208,7 @@ impl Default for RandomNBodyParams {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SimulationConfig {
     pub scenario: Scenario,
     pub screen_size: f32,
