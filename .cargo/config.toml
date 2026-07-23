@@ -1,0 +1,8 @@
+# macroquad/miniquad produces a wasm whose runtime imports (init_webgl, the gl*
+# calls, js_create_string, and our url_read_query / url_write_query /
+# url_copy_link env hooks) are undefined at link time and are meant to become
+# wasm imports, resolved by mq_js_bundle.js in the browser. Newer rust-lld makes
+# undefined symbols a hard link error by default, so opt back into importing
+# them. Scoped to wasm32 only — native builds/tests are unaffected.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--allow-undefined"]
