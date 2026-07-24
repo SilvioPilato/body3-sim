@@ -2,6 +2,41 @@ use body3_sim::simulation::{RandomNBodyParams, RandomSwarmParams, Scenario, Simu
 use egui_macroquad::egui;
 use macroquad::prelude::*;
 
+// ---- wasm physics micro-benchmark ----
+// Triggered by a `physbench=<measured_steps>` URL param (e.g.
+// `?scenario=centralswarm&swarm_size=50000&physbench=60`). Runs physics
+// substeps in tight in-frame bursts, timed with miniquad::date::now() (which,
+// unlike get_time(), advances mid-frame), and reports ms/step via the
+// `bench_report` JS hook (see index.html). Isolates the raw wasm codegen cost
+// of the same Simulation::update the native profile_workload example times.
+#[cfg(target_arch = "wasm32")]
+unsafe extern "C" {
+    fn bench_report(ptr: usize, len: usize);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn report_physbench(s: &str) {
+    unsafe { bench_report(s.as_ptr() as usize, s.len()); }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn parse_physbench(query: &str) -> Option<u32> {
+    query
+        .split('&')
+        .find_map(|p| p.strip_prefix("physbench=").and_then(|v| v.parse().ok()))
+}
+
+#[cfg(target_arch = "wasm32")]
+struct PhysBench {
+    target: u32,       // measured (post-warmup) substeps
+    warmup: u32,
+    done: u32,
+    counted: u32,
+    total_secs: f64,
+    swarm: usize,
+    reported: bool,
+}
+
 const SIDEBAR_WIDTH: f32 = 280.0;
 // total_energy() is exact O(n^2) (~1.1s at n=44000), so it runs on a
 // background worker (see `energy_worker` below) instead of the render
@@ -323,6 +358,9 @@ async fn main() {
         })
         .unwrap_or(BENCH_SWARM_SIZE);
 
+    #[cfg(target_arch = "wasm32")]
+    let mut physbench_steps: Option<u32> = None;
+
     let mut config = SimulationConfig::default();
     if benchmark_mode {
         config.scenario = Scenario::CentralSwarm { swarm_size: bench_swarm_size };
@@ -330,6 +368,7 @@ async fn main() {
         #[cfg(target_arch = "wasm32")]
         {
             let query = body3_sim::url::read_url_query();
+            physbench_steps = parse_physbench(&query);
             if let Some(decoded) = body3_sim::url::decode(&query) {
                 config = decoded;
             }
@@ -337,6 +376,15 @@ async fn main() {
     }
 
     let mut sim = Simulation::new(config);
+
+    // Force exactly one substep per update() call during the physics bench
+    // (accumulator += frame_time*time_scale; feeding frame_time == physics_dt
+    // with time_scale == 1.0 lands on the dt threshold once).
+    #[cfg(target_arch = "wasm32")]
+    let mut phys_bench: Option<PhysBench> = physbench_steps.map(|target| {
+        sim.set_time_scale(1.0);
+        PhysBench { target, warmup: 5, done: 0, counted: 0, total_secs: 0.0, swarm: sim.objects().len(), reported: false }
+    });
     let mut pending = *sim.config();
     let mut colors: Vec<Color> = (0..sim.objects().len()).map(|_| random_body_color()).collect();
     let mut total_energy = sim.total_energy();
@@ -355,6 +403,35 @@ async fn main() {
         // latter's now() is unsupported on wasm32-unknown-unknown and panics
         // every frame in the browser.
         let frame_start = get_time();
+
+        // Physics micro-benchmark: run a burst of substeps, timed sub-frame,
+        // and skip all rendering so the number is physics-only. Bursts (rather
+        // than one big synchronous run) keep the tab responsive.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(b) = phys_bench.as_mut() {
+            if !b.reported {
+                const CHUNK: u32 = 4;
+                let dt = sim.config().physics_dt;
+                let t0 = macroquad::miniquad::date::now();
+                for _ in 0..CHUNK {
+                    sim.update(dt);
+                }
+                let elapsed = macroquad::miniquad::date::now() - t0;
+                if b.done >= b.warmup {
+                    b.total_secs += elapsed;
+                    b.counted += CHUNK;
+                }
+                b.done += CHUNK;
+                if b.counted >= b.target {
+                    let per = b.total_secs * 1000.0 / b.counted as f64;
+                    report_physbench(&format!("PHYSBENCH swarm={} steps={} perstep={:.3}ms", b.swarm, b.counted, per));
+                    b.reported = true;
+                }
+            }
+            clear_background(BLACK);
+            next_frame().await;
+            continue;
+        }
 
         clear_background(BLACK);
         sim.update(get_frame_time());
