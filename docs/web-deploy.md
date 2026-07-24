@@ -32,8 +32,10 @@ the wasm and deploys production automatically. Open a pull request to get a
 preview URL for the branch (posted in the Actions run).
 
 What CI does:
-1. installs the Rust `wasm32-unknown-unknown` target (cached)
-2. `bash scripts/assemble-dist.sh` → builds wasm, assembles `dist/`
+1. installs the Rust **nightly** toolchain with `wasm32-unknown-unknown` and
+   `rust-src` (the force-solver Web Worker pool needs a `-Z build-std` build with
+   atomics/shared-memory — see `scripts/assemble-dist.sh` and `src/wasm_pool.rs`)
+2. `bash scripts/assemble-dist.sh` → builds the threaded wasm, assembles `dist/`
 3. `wrangler pages deploy dist` → uploads to Cloudflare Pages
 4. Cloudflare serves the deploy in ~1 min.
 
