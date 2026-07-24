@@ -120,6 +120,7 @@ impl Physics {
     }
 
     fn walk_potential(objects: &[PhysicsObject], tree: &Quadtree, theta: f32, softening: f32) -> f32 {
+        let theta_sq = theta * theta;
         let mut total = 0.0f32;
         for i in 0..objects.len() {
             let mut pair_sum = 0.0f32;
@@ -133,11 +134,12 @@ impl Physics {
                     }
                     WalkDecision::Skip
                 } else {
-                    let d = Vec2::distance(objects[i].position, node.center_of_mass);
-                    if d == 0.0 || (node.half_size * 2.0) / d > theta {
+                    let d_sq = Vec2::distance_squared(objects[i].position, node.center_of_mass);
+                    let width = node.half_size * 2.0;
+                    if d_sq == 0.0 || width * width > theta_sq * d_sq {
                         WalkDecision::Descend
                     } else {
-                        let dist_sq = d * d + softening * softening;
+                        let dist_sq = d_sq + softening * softening;
                         pair_sum += -GRAVITY * objects[i].mass * node.total_mass / dist_sq.sqrt();
                         WalkDecision::Skip
                     }
@@ -164,6 +166,11 @@ impl Physics {
     // built from. A mismatched slice isn't memory-unsafe but silently produces
     // wrong accelerations (or panics on an out-of-bounds index).
     pub fn walk_forces(objects: &[PhysicsObject], tree: &Quadtree, theta: f32, softening: f32) -> Vec<Vec2> {
+        // Opening test in squared distance to avoid a sqrt per internal-node
+        // visit: (2*half)/d > theta  <=>  (2*half)^2 > theta^2 * d^2 (all terms
+        // positive). The visit count dominates the walk, and the sqrt was thrown
+        // away on every descend, so this removes the hottest sqrt entirely.
+        let theta_sq = theta * theta;
         let mut res = Vec::with_capacity(objects.len());
         for i in 0..objects.len() {
             let mut acc = Vec2::ZERO;
@@ -176,8 +183,9 @@ impl Physics {
                     }
                     WalkDecision::Skip
                 } else {
-                    let d = Vec2::distance(objects[i].position, node.center_of_mass);
-                    if d == 0.0 || (node.half_size * 2.0) / d > theta {
+                    let dist_sq = Vec2::distance_squared(objects[i].position, node.center_of_mass);
+                    let width = node.half_size * 2.0;
+                    if dist_sq == 0.0 || width * width > theta_sq * dist_sq {
                         WalkDecision::Descend
                     } else {
                         acc += Physics::compute_acceleration(objects[i].position, node.center_of_mass, node.total_mass, softening);
