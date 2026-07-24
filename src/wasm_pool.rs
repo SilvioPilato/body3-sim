@@ -141,6 +141,9 @@ pub extern "C" fn pool_worker_loop() {
         }
         last = e;
         drain_chunks();
+        // Piggyback on the force job's wake: it fires every frame, so this is
+        // the energy job's only wake signal too (see the M5 comment below).
+        drain_energy_chunks(u32::MAX);
     }
 }
 
@@ -188,6 +191,10 @@ pub extern "C" fn pool_run(
     while COMPLETED.load(Ordering::Acquire) < total {
         core::hint::spin_loop();
     }
+    // Give the main thread a bounded chance to help the energy job along too,
+    // in case no workers ever registered (drain_energy_chunks is otherwise
+    // only reached from pool_worker_loop).
+    drain_energy_chunks(1);
 }
 
 /// Self-check: build a `swarm_size` central swarm, compute its accelerations
@@ -231,4 +238,113 @@ pub fn pooled_walk(objects: &[PhysicsObject], tree: &Quadtree, theta: f32, softe
         softening,
     );
     out
+}
+
+// ---- M5: async exact-energy job ----
+//
+// total_energy is exact O(n^2) — too slow to compute inline on the render
+// thread (~1.1s serial at n=44000, see energy.rs). Unlike the force walk this
+// job is NOT rendezvoused: `EnergyJob::request` publishes it and returns
+// immediately, and workers drain it opportunistically whenever they wake for
+// a force job (which happens every frame, so this piggybacks on that wake
+// instead of needing its own futex address). The calling thread also steals a
+// single chunk at the end of every `pool_run` so the job still finishes even
+// if no workers ever registered (the same degraded fallback the force walk
+// has). Only one energy job may be in flight at a time — the Rust-side
+// `EnergyWorker` (energy.rs) enforces that by refusing a new `request()`
+// while the previous `EnergyJob` hasn't reported `done()`.
+//
+// Chunked over rows of the i<j pair triangle, which is uneven (row i has n-i
+// pairs), so the chunk is smaller than the force walk's and work-stealing
+// (NEXT_CHUNK.fetch_add) evens it out across whichever threads pick up work.
+// Each chunk reduces into its own disjoint slot of a per-chunk output array
+// (float adds aren't atomic, so chunks can't share an accumulator); the
+// requester sums that array once `done()` is true.
+const ENERGY_CHUNK: usize = 64;
+
+static ENERGY_NEXT_CHUNK: AtomicU32 = AtomicU32::new(0);
+static ENERGY_COMPLETED: AtomicU32 = AtomicU32::new(0);
+static ENERGY_TOTAL_CHUNKS: AtomicU32 = AtomicU32::new(0);
+static ENERGY_N: AtomicUsize = AtomicUsize::new(0);
+static ENERGY_OBJECTS_PTR: AtomicUsize = AtomicUsize::new(0);
+static ENERGY_OUT_PTR: AtomicUsize = AtomicUsize::new(0);
+static ENERGY_SOFTENING_BITS: AtomicU32 = AtomicU32::new(0);
+
+// Steal up to `max_chunks` energy chunks (pass u32::MAX to drain fully — safe
+// for a background worker, but the main thread caps it so a frame can never
+// stall on a large leftover backlog).
+fn drain_energy_chunks(max_chunks: u32) {
+    let n = ENERGY_N.load(Ordering::Relaxed);
+    let total = ENERGY_TOTAL_CHUNKS.load(Ordering::Relaxed);
+    if n == 0 || total == 0 {
+        return;
+    }
+    let objects = unsafe {
+        core::slice::from_raw_parts(ENERGY_OBJECTS_PTR.load(Ordering::Relaxed) as *const PhysicsObject, n)
+    };
+    let out = ENERGY_OUT_PTR.load(Ordering::Relaxed) as *mut f32;
+    let softening = f32::from_bits(ENERGY_SOFTENING_BITS.load(Ordering::Relaxed));
+
+    for _ in 0..max_chunks {
+        let c = ENERGY_NEXT_CHUNK.fetch_add(1, Ordering::Relaxed);
+        if c >= total {
+            break;
+        }
+        let start = (c as usize) * ENERGY_CHUNK;
+        let end = (start + ENERGY_CHUNK).min(n);
+        let mut partial = 0.0f32;
+        for i in start..end {
+            partial += 0.5 * objects[i].mass * objects[i].velocity.length_squared();
+            for j in (i + 1)..n {
+                let dist_sq = Vec2::distance_squared(objects[i].position, objects[j].position) + softening * softening;
+                partial += -crate::physics::GRAVITY * objects[i].mass * objects[j].mass / dist_sq.sqrt();
+            }
+        }
+        // SAFETY: `c < total` and chunks partition disjoint output slots.
+        unsafe { *out.add(c as usize) = partial };
+        ENERGY_COMPLETED.fetch_add(1, Ordering::Release);
+    }
+}
+
+/// A published, in-flight exact-energy computation. Owns the snapshot and
+/// output buffer for as long as the job may still be read by a worker —
+/// dropping it before `done()` is true would be a use-after-free for whichever
+/// thread is mid-chunk.
+pub struct EnergyJob {
+    snapshot: Vec<PhysicsObject>,
+    partials: Vec<f32>,
+}
+
+impl EnergyJob {
+    pub fn request(objects: &[PhysicsObject], softening: f32) -> Self {
+        let snapshot: Vec<PhysicsObject> = objects.to_vec();
+        let n = snapshot.len();
+        let total = n.div_ceil(ENERGY_CHUNK) as u32;
+        let mut partials = vec![0.0f32; total as usize];
+
+        ENERGY_OBJECTS_PTR.store(snapshot.as_ptr() as usize, Ordering::Relaxed);
+        ENERGY_OUT_PTR.store(partials.as_mut_ptr() as usize, Ordering::Relaxed);
+        ENERGY_SOFTENING_BITS.store(softening.to_bits(), Ordering::Relaxed);
+        ENERGY_NEXT_CHUNK.store(0, Ordering::Relaxed);
+        ENERGY_COMPLETED.store(0, Ordering::Relaxed);
+        ENERGY_N.store(n, Ordering::Relaxed);
+        // Publish total last (Release) — it's the field drain_energy_chunks
+        // checks before touching the others, so this must become visible only
+        // after everything it depends on already is.
+        ENERGY_TOTAL_CHUNKS.store(total, Ordering::Release);
+
+        Self { snapshot, partials }
+    }
+
+    /// Non-blocking. Once true, every chunk's partial sum is in `self.partials`
+    /// and no thread will touch `self.snapshot`/`self.partials` again.
+    pub fn done(&self) -> bool {
+        ENERGY_COMPLETED.load(Ordering::Acquire) >= ENERGY_TOTAL_CHUNKS.load(Ordering::Relaxed)
+    }
+
+    pub fn total_energy(&self) -> f32 {
+        let kinetic_and_potential: f32 = self.partials.iter().sum();
+        let _ = &self.snapshot; // kept alive only for the safety argument above
+        kinetic_and_potential
+    }
 }
