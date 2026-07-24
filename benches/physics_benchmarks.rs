@@ -54,6 +54,21 @@ fn bench_walk_forces(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_walk_forces_parallel(c: &mut Criterion) {
+    let mut group = c.benchmark_group("walk_forces_parallel");
+    for &n in &SWARM_SIZES {
+        let sim = build_sim(n);
+        let objects = sim.objects().to_vec();
+        let center = vec2(SCREEN_SIZE / 2.0, SCREEN_SIZE / 2.0);
+        let half_size = sim.world_half_size();
+        let tree = Quadtree::build(&objects, center, half_size);
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| Physics::walk_forces_parallel(&objects, &tree, BENCH_THETA, BENCH_SOFTENING));
+        });
+    }
+    group.finish();
+}
+
 fn bench_compute_accelerations(c: &mut Criterion) {
     let mut group = c.benchmark_group("compute_accelerations");
     for &n in &SWARM_SIZES {
@@ -124,6 +139,7 @@ criterion_group!(
     benches,
     bench_quadtree_build,
     bench_walk_forces,
+    bench_walk_forces_parallel,
     bench_compute_accelerations,
     bench_verlet_step,
     bench_verlet_step_cached,

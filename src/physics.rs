@@ -159,42 +159,88 @@ impl Physics {
 
     pub fn compute_accelerations(objects: &[PhysicsObject], center: Vec2, half_size: f32, theta: f32, softening: f32) -> Vec<Vec2> {
         let tree = Quadtree::build(objects, center, half_size);
-        Self::walk_forces(objects, &tree, theta, softening)
+        // On wasm the force walk is dispatched across the Web Worker pool (which
+        // falls back to running everything on the calling thread when no workers
+        // have registered, so the result is identical to the serial walk).
+        #[cfg(all(target_arch = "wasm32", feature = "threads"))]
+        {
+            crate::wasm_pool::pooled_walk(objects, &tree, theta, softening)
+        }
+        #[cfg(not(all(target_arch = "wasm32", feature = "threads")))]
+        {
+            Self::walk_forces(objects, &tree, theta, softening)
+        }
     }
 
     // `objects` must be the exact slice (same length and order) that `tree` was
     // built from. A mismatched slice isn't memory-unsafe but silently produces
     // wrong accelerations (or panics on an out-of-bounds index).
     pub fn walk_forces(objects: &[PhysicsObject], tree: &Quadtree, theta: f32, softening: f32) -> Vec<Vec2> {
-        // Opening test in squared distance to avoid a sqrt per internal-node
-        // visit: (2*half)/d > theta  <=>  (2*half)^2 > theta^2 * d^2 (all terms
-        // positive). The visit count dominates the walk, and the sqrt was thrown
-        // away on every descend, so this removes the hottest sqrt entirely.
         let theta_sq = theta * theta;
-        let mut res = Vec::with_capacity(objects.len());
-        for i in 0..objects.len() {
-            let mut acc = Vec2::ZERO;
-            tree.walk(&mut |node| {
-                if let Some(indices) = node.indices {
-                    for &j in indices {
-                        if j != i {
-                            acc += Physics::compute_acceleration(objects[i].position, objects[j].position, objects[j].mass, softening);
-                        }
-                    }
-                    WalkDecision::Skip
-                } else {
-                    let dist_sq = Vec2::distance_squared(objects[i].position, node.center_of_mass);
-                    let width = node.half_size * 2.0;
-                    if dist_sq == 0.0 || width * width > theta_sq * dist_sq {
-                        WalkDecision::Descend
-                    } else {
-                        acc += Physics::compute_acceleration(objects[i].position, node.center_of_mass, node.total_mass, softening);
-                        WalkDecision::Skip
+        (0..objects.len())
+            .map(|i| Self::body_acceleration(i, objects, tree, theta_sq, softening))
+            .collect()
+    }
+
+    // Acceleration on body `i` from a Barnes-Hut walk. `theta_sq` is theta*theta
+    // (hoisted out of the per-body loop). Reads only `objects` and `tree`, so
+    // calls for distinct `i` are independent — the basis for walk_forces_parallel.
+    //
+    // Opening test in squared distance to avoid a sqrt per internal-node visit:
+    // (2*half)/d > theta  <=>  (2*half)^2 > theta^2 * d^2 (all terms positive).
+    // The visit count dominates the walk, and the sqrt was thrown away on every
+    // descend, so this removes the hottest sqrt entirely.
+    #[inline]
+    pub(crate) fn body_acceleration(i: usize, objects: &[PhysicsObject], tree: &Quadtree, theta_sq: f32, softening: f32) -> Vec2 {
+        let pos_i = objects[i].position;
+        let mut acc = Vec2::ZERO;
+        tree.walk(&mut |node| {
+            if let Some(indices) = node.indices {
+                for &j in indices {
+                    if j != i {
+                        acc += Physics::compute_acceleration(pos_i, objects[j].position, objects[j].mass, softening);
                     }
                 }
-            });
-            res.push(acc);
+                WalkDecision::Skip
+            } else {
+                let dist_sq = Vec2::distance_squared(pos_i, node.center_of_mass);
+                let width = node.half_size * 2.0;
+                if dist_sq == 0.0 || width * width > theta_sq * dist_sq {
+                    WalkDecision::Descend
+                } else {
+                    acc += Physics::compute_acceleration(pos_i, node.center_of_mass, node.total_mass, softening);
+                    WalkDecision::Skip
+                }
+            }
+        });
+        acc
+    }
+
+    // Data-parallel force walk: each body's acceleration is independent, so
+    // split the index range across a scoped thread pool sharing `&tree` and
+    // `&objects` immutably and writing into disjoint output slots. Native only
+    // — wasm32-unknown-unknown std has no threads (see the wasm path in
+    // Simulation). Falls back to serial below a size where spawn overhead wins.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn walk_forces_parallel(objects: &[PhysicsObject], tree: &Quadtree, theta: f32, softening: f32) -> Vec<Vec2> {
+        let theta_sq = theta * theta;
+        let n = objects.len();
+        let threads = std::thread::available_parallelism().map(|t| t.get()).unwrap_or(1);
+        if threads <= 1 || n < 4096 {
+            return Self::walk_forces(objects, tree, theta, softening);
         }
+        let mut res = vec![Vec2::ZERO; n];
+        let chunk = n.div_ceil(threads);
+        std::thread::scope(|s| {
+            for (ci, out) in res.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                s.spawn(move || {
+                    for (li, slot) in out.iter_mut().enumerate() {
+                        *slot = Self::body_acceleration(base + li, objects, tree, theta_sq, softening);
+                    }
+                });
+            }
+        });
         res
     }
 }

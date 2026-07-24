@@ -29,6 +29,26 @@
          allocates a (len, bytes) tuple in wasm memory via
          wasm_exports.allocate_vec_u8 and returns its pointer. -->
     <script>
+      // Shared linear memory for the hand-rolled Web Worker thread pool. Created
+      // here (SharedArrayBuffer-backed; needs COOP/COEP) and injected as the
+      // wasm's imported `env.memory` via the plugin hook, so the main instance
+      // and every worker instance share one address space. Sizing MUST match
+      // scripts/build-wasm-threads.sh (--initial-memory / --max-memory), in
+      // 64KiB pages: 64 MiB initial = 1024, 1 GiB max = 16384.
+      const SHARED_MEMORY =
+        typeof SharedArrayBuffer !== "undefined"
+          ? new WebAssembly.Memory({ initial: 1024, maximum: 16384, shared: true })
+          : null;
+      window.__shared_memory = SHARED_MEMORY;
+      if (SHARED_MEMORY) {
+        miniquad_add_plugin({
+          register_plugin: function (import_obj) {
+            import_obj.env.memory = SHARED_MEMORY;
+          },
+          version: 1,
+          name: "shared_memory_plugin",
+        });
+      }
       miniquad_add_plugin({
         register_plugin: function (import_obj) {
           import_obj.env.url_read_query = function () {
@@ -49,6 +69,15 @@
             const new_url = query.length === 0 ? path : path + "?" + query;
             window.history.replaceState(null, "", new_url);
           };
+          // Physics micro-benchmark readback (see main.rs PhysBench): stash the
+          // result on window for automated readback and log it to the console.
+          import_obj.env.bench_report = function (ptr, len) {
+            const bytes = new Uint8Array(wasm_memory.buffer, ptr, len);
+            let s = "";
+            for (let i = 0; i < len; i++) s += String.fromCharCode(bytes[i]);
+            window.__physbench = s;
+            console.log(s);
+          };
           import_obj.env.url_copy_link = function (ptr, len) {
             const bytes = new Uint8Array(wasm_memory.buffer, ptr, len);
             let query = "";
@@ -68,6 +97,56 @@
     </script>
     <script>
       load("body3-sim.wasm");
+    </script>
+    <!-- Hand-rolled Web Worker thread pool (no wasm-bindgen). Once the main
+         wasm instance is up, spawn N workers that instantiate the same module
+         against the shared memory, set up their own stack + TLS, and park in
+         pool_worker_loop() waiting for force-eval jobs. See src/wasm_pool.rs. -->
+    <script>
+      (function initThreadPool() {
+        const memory = window.__shared_memory;
+        if (!memory) return; // no SharedArrayBuffer: stays single-threaded
+
+        const STACK = 1 << 20; // 1 MiB per-worker stack
+        const wasmUrl = location.origin + "/body3-sim.wasm";
+        const workerSrc =
+          "self.onmessage = async (e) => {" +
+          "  const { wasmUrl, memory, stackTop, tlsBase } = e.data;" +
+          "  const mod = await WebAssembly.compile(await (await fetch(wasmUrl)).arrayBuffer());" +
+          "  const io = {};" +
+          "  for (const imp of WebAssembly.Module.imports(mod)) {" +
+          "    io[imp.module] = io[imp.module] || {};" +
+          "    if (imp.kind === 'memory') io[imp.module][imp.name] = memory;" +
+          "    else if (imp.kind === 'function') io[imp.module][imp.name] = () => 0;" +
+          "    else if (imp.kind === 'table') io[imp.module][imp.name] = new WebAssembly.Table({ initial: 0, element: 'anyfunc' });" +
+          "    else if (imp.kind === 'global') io[imp.module][imp.name] = new WebAssembly.Global({ value: 'i32', mutable: true }, 0);" +
+          "  }" +
+          "  const inst = await WebAssembly.instantiate(mod, io);" +
+          "  inst.exports.__stack_pointer.value = stackTop;" +
+          "  inst.exports.__wasm_init_tls(tlsBase);" +
+          "  inst.exports.pool_worker_loop();" + // never returns
+          "};";
+        const blobUrl = URL.createObjectURL(new Blob([workerSrc], { type: "text/javascript" }));
+
+        (function spawnWhenReady() {
+          const exp = window.wasm_exports;
+          if (!exp || !exp.pool_alloc || !exp.pool_worker_loop || !exp.__tls_size) {
+            setTimeout(spawnWhenReady, 50);
+            return;
+          }
+          const hw = navigator.hardwareConcurrency || 4;
+          const n = Math.max(1, Math.min(hw - 1, 12)); // leave a core for main
+          const tlsSize = exp.__tls_size.value;
+          const tlsAlign = exp.__tls_align.value;
+          for (let i = 0; i < n; i++) {
+            const stackTop = (exp.pool_alloc(STACK, 16) + STACK) >>> 0;
+            const tlsBase = exp.pool_alloc(tlsSize, tlsAlign) >>> 0;
+            const w = new Worker(blobUrl);
+            w.postMessage({ wasmUrl, memory, stackTop, tlsBase });
+          }
+          console.log("thread pool: spawned " + n + " workers");
+        })();
+      })();
     </script>
   </body>
 </html>

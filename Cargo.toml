@@ -9,6 +9,10 @@ egui-macroquad = "0.17.3"
 
 [features]
 default = []
+# Web Worker force-eval pool (src/wasm_pool.rs). Requires a nightly build with
+# atomics/shared-memory (see scripts/build-wasm-threads.sh); off by default so
+# the normal stable wasm/native builds are unaffected.
+threads = []
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
